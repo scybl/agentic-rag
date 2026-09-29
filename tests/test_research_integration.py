@@ -77,6 +77,10 @@ def test_specialist_can_request_original_once_and_reuses_across_runs(tmp_path):
     assert "能繁母猪存栏减少" in payloads[1]["context"]
     assert first["specialist_findings"] == second["specialist_findings"]
     assert "原文回读" in first["evidence_context"]
+    tool_events = [event for event in database.events('one') if event.get('kind') == 'tool']
+    assert [event['phase'] for event in tool_events] == ['started', 'finished']
+    assert {event['tool'] for event in tool_events} == {'read_news'}
+    assert len({event['tool_call_id'] for event in tool_events}) == 1
     for passage in first["specialist_findings"][0]["reread_passages"]:
         assert article["body"][passage["start"]:passage["end"]] == passage["quote"]
 

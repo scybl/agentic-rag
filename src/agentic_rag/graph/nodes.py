@@ -18,10 +18,10 @@ from langgraph.config import get_stream_writer
 from ..analysis_cache import AnalysisCache, build_cache_key, evidence_identity
 from ..config import settings
 from ..evidence import deduplicate, document_key, excerpt, format_evidence
-from ..ingestion import ensure_index, get_retriever
-from ..news_retrieval import retrieve_news
 from ..news_plan import clean_queries, prepare_news_plan
-from ..tools.web_search import search_web
+from ..tools import SOURCE_TOOLS
+from ..tools.contracts import ToolContext
+from ..tools.execution import execute_tool
 from .chains import (
     get_document_grader,
     get_generator,
@@ -109,14 +109,40 @@ def route(state: GraphState) -> GraphState:
     }
 
 
+def _source_writer(state: GraphState):
+    """把工具事件送回主图线程，并为可恢复研究保留调用记录。"""
+    if state.get("_event_writer") is not None:
+        return state["_event_writer"]
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = lambda _event: None
+    database = None
+    if state.get("run_id") and state.get("reading_recipe"):
+        from ..research.service import store
+        database = store()
+
+    def emit(event):
+        if database is not None and event.get("kind") == "tool":
+            database.event(state["run_id"], event)
+        writer(event)
+    return emit
+
+
+def _search_source(source: str, arguments: dict, state: GraphState) -> GraphState:
+    """节点只负责把工具证据写回状态，不再了解 HTTP、向量排序或转换细节。"""
+    message = execute_tool(SOURCE_TOOLS[source], arguments,
+                           context=ToolContext(emit=_source_writer(state)))
+    bundle = message.artifact
+    update = {"documents": bundle.documents, "datasource": source,
+              "source_errors": {source: "；".join(bundle.warnings)} if bundle.warnings else {}}
+    if source == "news_api":
+        update["news_trace"] = bundle.events
+    return update
+
+
 def retrieve(state: GraphState) -> GraphState:
-    # 仅在路由到本地知识库时初始化索引，避免其他数据源加载嵌入模型。
-    ensure_index()
-    documents = get_retriever().invoke(state["question"])
-    for document in documents:
-        document.metadata["source_type"] = "vectorstore"
-    logger.info("Retrieved %d chunks", len(documents))
-    return {"documents": documents}
+    return _search_source("vectorstore", {"query": state["question"]}, state)
 
 
 def grade_documents(state: GraphState) -> GraphState:
@@ -150,85 +176,21 @@ def grade_documents(state: GraphState) -> GraphState:
 
 
 def web_search(state: GraphState) -> GraphState:
-    documents = search_web(state["question"])
-    for document in documents:
-        document.metadata["source_type"] = "web_search"
-    logger.info("Web search returned %d results", len(documents))
-    return {"documents": documents, "datasource": "web_search"}
-
-
-def _news_item_to_document(item: dict) -> Document | None:
-    """将一条新闻接口记录转换成下游节点统一使用的 Document。"""
-    title = str(item.get("title") or "").strip()
-    content = str(item.get("content") or item.get("summary") or "").strip()
-    if not title and not content:
-        return None
-
-    published_at = str(item.get("published_at") or "").strip()
-    section = str(item.get("section") or "").strip()
-    parts = []
-    if title:
-        parts.append(f"标题：{title}")
-    if published_at:
-        parts.append(f"发布时间：{published_at}")
-    if section:
-        parts.append(f"栏目：{section}")
-    if content:
-        parts.append(f"正文：\n{content}")
-
-    url = str(item.get("canonical_url") or item.get("url") or "").strip()
-    source_name = str(item.get("source_name") or "news_api").strip()
-    return Document(
-        page_content="\n".join(parts),
-        metadata={
-            "source": url or source_name,
-            "source_name": source_name,
-            "title": title,
-            "published_at": published_at,
-            "section": section,
-            "article_id": str(item.get("article_id") or ""),
-            "url": url,
-            "content_hash": str(item.get("content_hash") or ""),
-            "source_type": "news_api",
-            "content_kind": "news_article" if item.get("_content_scope", "full" if item.get("content") else "summary") == "full" else "news_summary",
-        },
-    )
+    return _search_source("web_search", {"query": state["question"]}, state)
 
 
 def news_api(state: GraphState) -> GraphState:
-    """用 API 召回新闻、向量缓存重排，并转换为统一证据文档。"""
+    """日期决策属于规划层；经校验后才把实际条件交给新闻工具。"""
     plan = state.get("news_search_plan") or prepare_news_plan(
         state["question"], "", {"mode": "unrestricted"},
     )
     if plan.get("error"):
         raise ValueError(plan["error"])
-    try:
-        writer = state.get("_event_writer") or get_stream_writer()
-    except RuntimeError:  # 允许在图外直接调用节点进行测试或调试。
-        writer = lambda _event: None
-    result = retrieve_news(
-        semantic_query=state.get("original_question", state["question"]),
-        api_query=plan["query"],
-        api_queries=plan.get("queries"),
-        start=plan["start"],
-        end=plan["end"],
-        section=plan["section"],
-        on_event=writer,
-    )
-    documents = []
-    for item in result.items:
-        document = _news_item_to_document(item)
-        if document is not None:
-            documents.append(document)
-    logger.info(
-        "News retrieval returned %d articles (vector cache: %s)",
-        len(documents),
-        result.vector_cache_used,
-    )
-    return {
-        "documents": documents, "datasource": "news_api", "news_trace": result.events,
-        "source_errors": {"news_api": result.api_error or "新闻 API 查询失败"} if result.api_failed else {},
-    }
+    return _search_source("news_api", {
+        "semantic_query": state.get("original_question", state["question"]),
+        "queries": plan.get("queries") or [plan["query"]],
+        "start": plan["start"], "end": plan["end"], "section": plan["section"],
+    }, state)
 
 
 def _deduplicate_documents(documents: list[Document]) -> list[Document]:
@@ -248,10 +210,8 @@ def collect_sources(state: GraphState) -> GraphState:
         "web_search": web_search,
     }
     events = queue.SimpleQueue()
-    try:
-        emit = get_stream_writer()
-    except RuntimeError:
-        emit = lambda event: None
+    emit = _source_writer(state)
+
     def fetch(source):
         query = state["source_queries"].get(source, state["question"])
         try:
@@ -384,7 +344,9 @@ def supplement_sources(state: GraphState) -> GraphState:
         history.extend(f"news_api: {q}" for q in news_queries)
     for query in state.get("pending_web_queries", []):
         try:
-            extra = web_search({"question": query})["documents"]
+            web_update = web_search({**state, "question": query})
+            extra = web_update["documents"]
+            errors.update(web_update.get("source_errors", {}))
             for doc in extra:
                 doc.metadata["retrieval_round"] = state.get("retries", 0) + 1
             documents = extra + documents

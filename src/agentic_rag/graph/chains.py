@@ -175,7 +175,8 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages(
             "news_time unrestricted with empty dates. "
             "Also provide one short plan_summary that explains the source choice "
             "to the user without revealing hidden chain-of-thought. "
-            "Write user-facing explanations in the user's language.",
+            "Write user-facing explanations in the user's language.\n"
+            "Available tool boundaries (the program executes them from your structured plan):\n{tool_catalog}",
         ),
         ("human", "原始问题：{original_question}\n本轮检索问题：{question}"),
     ]
@@ -188,8 +189,10 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages(
 
 @lru_cache(maxsize=1)
 def get_router():
+    from ..tools import describe_tools
+
     return _with_model_retry(
-        ROUTER_PROMPT | get_llm().with_structured_output(SourcePlan)
+        ROUTER_PROMPT.partial(tool_catalog=describe_tools()) | get_llm().with_structured_output(SourcePlan)
     )
 
 

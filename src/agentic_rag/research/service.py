@@ -16,14 +16,17 @@ from ..ollama_connection import ollama_client_kwargs
 from .chains import reader, specialist, validate_reading, numbered_sentences, resolve_selection
 from .memory import MemoryIndex
 from .scheduler import Scheduler, TaskSpec
-from .store import ResearchStore, fingerprint, search_tokens
+from .store import ResearchStore, fingerprint
 from .runtime import task_context
 from ..evidence import format_evidence
+from ..tools import read_news
+from ..tools.contracts import ToolContext
+from ..tools.execution import execute_tool
 
 
 READING_VERSION = "reader-v2-sentence-selection-schema2"
-SPECIALIST_VERSION = "specialist-v3-original-reread"
-WORKFLOW_VERSION = "research-workflow-v1"
+SPECIALIST_VERSION = "specialist-v4-tool-reread"
+WORKFLOW_VERSION = "research-workflow-v2-tools"
 
 
 def store():
@@ -144,32 +147,6 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
             "no_progress_rounds": state.get("no_progress_rounds", 0) + 1 if unchanged else 0}
 
 
-def original_passages(database, documents, ids, goal, budget=1600):
-    """按目标回读已保存的原文，返回可检查的连续片段与绝对位置。"""
-    passages = []
-    terms = search_tokens(goal)
-    for eid in list(dict.fromkeys(ids))[:2]:
-        if not re.fullmatch(r"E[1-9]\d*", eid) or int(eid[1:]) > len(documents):
-            raise ValueError("原文回读请求引用了不存在的证据")
-        document = documents[int(eid[1:]) - 1]
-        version = document.metadata.get("memory_version")
-        if not version:
-            continue
-        original = database.document(version).page_content
-        sentences, _ = numbered_sentences(original)
-        ranked = sorted(sentences.values(), key=lambda p: sum(t in original[p[0]:p[1]].lower() for t in terms), reverse=True)
-        remaining = budget // max(1, min(2, len(ids)))
-        for start, end in ranked:
-            if remaining < 50:
-                break
-            end = min(end, start + remaining)
-            quote = original[start:end]
-            passages.append({"evidence_id": eid, "version_id": version, "start": start, "end": end, "quote": quote,
-                             "content_kind": document.metadata.get("content_kind", "unknown")})
-            remaining -= len(quote)
-    return passages
-
-
 def dispatch_specialists(state, *, database=None, analyze_fn=None, index=None):
     database = database or store()
     context = state.get("evidence_context", "")
@@ -194,11 +171,17 @@ def dispatch_specialists(state, *, database=None, analyze_fn=None, index=None):
         passages = []
         requests = result.get("reread_evidence_ids", [])
         if requests:
-            passages = original_passages(database, state["answer_documents"], requests, payload["goal"])
             ctx = task_context.get()
+            emit_tool = (lambda event: ctx["emit"]("tool", event)) if ctx else writer()
+            observation = execute_tool(read_news, {"evidence_ids": requests, "goal": payload["goal"]},
+                context=ToolContext(emit=emit_tool, read_version=database.document,
+                    evidence={f"E{i}": doc for i, doc in enumerate(state["answer_documents"], 1)}))
+            passages = observation.artifact.passages
             if ctx:
                 ctx["emit"]("reread", {"evidence_ids": requests[:2], "passages": len(passages)})
             details = "\n".join(f"[{p['evidence_id']}] 原文位置 {p['start']}–{p['end']}：{p['quote']}" for p in passages)
+            if observation.artifact.warnings:
+                details += "\n回读限制：" + "；".join(observation.artifact.warnings)
             if not passages:
                 details = "请求的材料没有已保存的新闻全文，只能使用现有摘要；不得伪装成全文。"
             reread_context = format_evidence(state["answer_documents"], payload["goal"], max(1000, settings.generation_context_chars - len(details) - 100))

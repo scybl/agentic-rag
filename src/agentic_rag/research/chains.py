@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from ..graph.chains import _with_model_retry, get_llm
+from ..evidence import numbered_sentences
 
 
 class Claim(BaseModel):
@@ -30,16 +31,6 @@ class SelectedClaim(BaseModel):
 class SelectedReading(BaseModel):
     claims: list[SelectedClaim] = Field(description="最多6项关键事实或观点，引用对应句子编号")
     limitations: list[str]
-
-
-def numbered_sentences(text):
-    sentences = {}
-    for match in re.finditer(r"[^。！？；\n]+[。！？；]?", text):
-        for start in range(match.start(), match.end(), 400):
-            end = min(start + 400, match.end())
-            sentences[f"S{len(sentences)+1}"] = (start, end)
-    rendered = "\n".join(f"[{sid}] {text[start:end]}" for sid, (start, end) in sentences.items())
-    return sentences, rendered
 
 
 def resolve_selection(result, original, sentences):

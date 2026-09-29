@@ -4,24 +4,34 @@ import logging
 
 from ddgs import DDGS
 from langchain_core.documents import Document
+from langchain_core.tools import ToolException, tool
+from pydantic import Field
+
+from .contracts import EvidenceBundle, Query, ToolInput
 
 logger = logging.getLogger(__name__)
 
 
-def search_web(query: str, max_results: int = 4) -> list[Document]:
-    """搜索网络，并将搜索结果摘要作为 Document 返回。
+class WebSearchInput(ToolInput):
+    query: Query = Field(description="公开网络搜索词，用于补充或核对公开资料")
+    max_results: int = Field(default=4, ge=1, le=10, strict=True, description="最多返回几条摘要，范围1至10")
 
-    发生网络错误时返回空列表，使流程图仍能如实回答“不知道”，
-    而不是直接崩溃。
+
+@tool("search_web", args_schema=WebSearchInput, response_format="content_and_artifact")
+def search_web(query: str, max_results: int = 4) -> tuple[str, EvidenceBundle]:
+    """搜索公开网页，返回带网址的搜索摘要，不保证获取网页全文。
+
+    用于私有新闻之外的公开核验与补充，不替代本地知识库或私有新闻接口。
+    网络故障明确报错，由调用方保留其他来源的成功结果。
     """
     try:
         from ..research.runtime import io_capacity
         with io_capacity().slot():
             results = DDGS(timeout=20).text(query, max_results=max_results)
-    except Exception:
+    except Exception as exc:
         logger.warning("Web search failed for query: %s", query, exc_info=True)
-        return []
-    return [
+        raise ToolException(f"公开搜索失败（{type(exc).__name__}），不是检索零结果") from exc
+    documents = [
         Document(
             page_content=item.get("body", ""),
             metadata={"source": item.get("href", ""), "title": item.get("title", ""),
@@ -30,3 +40,4 @@ def search_web(query: str, max_results: int = 4) -> list[Document]:
         for item in results
         if item.get("body")
     ]
+    return EvidenceBundle(documents=documents).as_response()

@@ -9,6 +9,7 @@ from agentic_rag.graph import nodes
 from agentic_rag.graph.chains import NewsTimeSuggestion, SourcePlan
 from agentic_rag.news_plan import prepare_news_plan
 from agentic_rag.news_retrieval import NewsRetrievalResult
+from agentic_rag.tools import news as news_tools
 
 
 class NewsGraphTests(unittest.TestCase):
@@ -85,7 +86,7 @@ class NewsGraphTests(unittest.TestCase):
             vector_cache_used=True,
         )
         with (
-            patch.object(nodes, "retrieve_news", return_value=retrieval) as retrieve,
+            patch.object(news_tools, "retrieve_news", return_value=retrieval) as retrieve,
         ):
             result = nodes.news_api({"question": "今天的生猪新闻", "news_search_plan": self.search_plan})
 
@@ -97,7 +98,7 @@ class NewsGraphTests(unittest.TestCase):
         retrieve.assert_called_once_with(
             semantic_query="今天的生猪新闻",
             api_query="生猪",
-            api_queries=None,
+            api_queries=["生猪"],
             start="2026-09-29",
             end="2026-09-29",
             section="财经",
@@ -108,7 +109,7 @@ class NewsGraphTests(unittest.TestCase):
         plan = prepare_news_plan("生猪", "", {
             "mode": "suggested", "start": "2026-09-01", "end": "", "reason": "观察本月供需变化",
         })
-        with patch.object(nodes, "retrieve_news", return_value=NewsRetrievalResult(
+        with patch.object(news_tools, "retrieve_news", return_value=NewsRetrievalResult(
             items=[], api_failed=True, api_error="News API returned HTTP 503",
         )) as retrieve:
             result = nodes.collect_sources({
@@ -123,7 +124,7 @@ class NewsGraphTests(unittest.TestCase):
         plan = prepare_news_plan("生猪", "", {
             "mode": "explicit", "start": "2026-02-30", "end": "", "reason": "用户日期解析失败",
         })
-        with patch.object(nodes, "retrieve_news") as retrieve:
+        with patch.object(news_tools, "retrieve_news") as retrieve:
             with self.assertRaisesRegex(ValueError, "停止本次新闻查询"):
                 nodes.news_api({"question": "生猪", "news_search_plan": plan})
         retrieve.assert_not_called()

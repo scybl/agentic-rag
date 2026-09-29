@@ -1,127 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1184" viewBox="0 0 1200 1184" role="img" aria-label="Agentic RAG 多源问答九步执行流程图">
-  <title>Agentic RAG 多源问答九步执行流程</title>
-  <desc>终端提交问题后，规划器选择一个或多个数据源；知识库、新闻混合检索和公开网络按计划收集资料，收集器合并去重，评估器筛选证据，生成器创建或复用答案，核验器决定返回、改写重试或诚实说明证据不足。</desc>
-  <rect x="0" y="0" width="1200" height="1184" fill="#F8FAFC" stroke="none"/>
-
-  <text x="48" y="64" text-anchor="start" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A">Agentic RAG：对照终端学习的九步执行流程</text>
-  <text x="48" y="88" text-anchor="start" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">蓝色＝主流程　灰色＝证据流　橙色＝改写与回退</text>
-
-  <!-- 终端输入到规划器 -->
-  <path d="M 48 136 L 489 136" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 490 136 L 478 131 L 478 141 Z" fill="#64748B" stroke="none"/>
-  <rect x="188" y="122" width="160" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="268" y="142" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">终端提交原始问题</text>
-
-  <!-- 规划器到三个来源 -->
-  <path d="M 548 172 L 548 232 L 214 232 L 214 291" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 214 292 L 209 280 L 219 280 Z" fill="#64748B" stroke="none"/>
-  <rect x="330" y="218" width="120" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="390" y="238" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">选中知识库</text>
-
-  <path d="M 600 172 L 600 291" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 600 292 L 595 280 L 605 280 Z" fill="#64748B" stroke="none"/>
-  <rect x="608" y="218" width="120" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="668" y="238" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">选中新闻源</text>
-
-  <path d="M 652 172 L 652 232 L 986 232 L 986 291" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 986 292 L 981 280 L 991 280 Z" fill="#64748B" stroke="none"/>
-  <rect x="750" y="218" width="120" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="810" y="238" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">选中公开网</text>
-
-  <!-- 三个来源汇入收集器 -->
-  <path d="M 214 364 L 214 420 L 548 420 L 548 475" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 548 476 L 543 464 L 553 464 Z" fill="#64748B" stroke="none"/>
-  <rect x="330" y="406" width="120" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="390" y="426" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">方法文本块</text>
-
-  <path d="M 600 364 L 600 475" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 600 476 L 595 464 L 605 464 Z" fill="#64748B" stroke="none"/>
-  <rect x="608" y="406" width="120" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="668" y="426" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">入选新闻正文</text>
-
-  <path d="M 986 364 L 986 420 L 652 420 L 652 475" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 652 476 L 647 464 L 657 464 Z" fill="#64748B" stroke="none"/>
-  <rect x="750" y="406" width="120" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="810" y="426" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">公开网页摘要</text>
-
-  <!-- 主线：合并、筛选、生成、核验 -->
-  <path d="M 600 548 L 600 639" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 600 640 L 595 628 L 605 628 Z" fill="#2563EB" stroke="none"/>
-  <rect x="608" y="580" width="144" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="680" y="600" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#2563EB">合并后的证据集</text>
-
-  <path d="M 600 712 L 600 803" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 600 804 L 595 792 L 605 792 Z" fill="#2563EB" stroke="none"/>
-  <rect x="608" y="744" width="128" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="672" y="764" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#2563EB">存在相关证据</text>
-
-  <path d="M 600 876 L 600 967" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 600 968 L 595 956 L 605 956 Z" fill="#2563EB" stroke="none"/>
-  <rect x="608" y="908" width="128" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="672" y="928" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#2563EB">候选答案</text>
-
-  <!-- 证据不足：进入改写器 -->
-  <path d="M 490 672 L 348 672 L 348 828 L 317 828" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 316 828 L 328 823 L 328 833 Z" fill="#B45309" stroke="none"/>
-  <rect x="332" y="722" width="152" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="408" y="742" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#B45309">无证据且可重试</text>
-
-  <!-- 改写器返回规划器 -->
-  <path d="M 96 840 L 48 840 L 48 152 L 489 152" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 490 152 L 478 147 L 478 157 Z" fill="#B45309" stroke="none"/>
-  <rect x="64" y="184" width="144" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="136" y="204" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#B45309">重新规划与检索</text>
-
-  <!-- 重试用尽且未查 Web：回退到公开网 -->
-  <path d="M 710 688 L 1148 688 L 1148 328 L 1097 328" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 1096 328 L 1108 323 L 1108 333 Z" fill="#B45309" stroke="none"/>
-  <rect x="920" y="674" width="200" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="1020" y="694" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#B45309">重试用尽且尚未查 Web</text>
-
-  <!-- 核验失败：返回改写器 -->
-  <path d="M 490 1028 L 348 1028 L 348 852 L 317 852" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 316 852 L 328 847 L 328 857 Z" fill="#B45309" stroke="none"/>
-  <rect x="332" y="974" width="152" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="408" y="994" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#B45309">依据不足且可重试</text>
-
-  <!-- 核验后的两个终态 -->
-  <path d="M 710 992 L 1151 992" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
-  <path d="M 1152 992 L 1140 987 L 1140 997 Z" fill="#2563EB" stroke="none"/>
-  <rect x="820" y="978" width="240" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="940" y="998" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#2563EB">通过或缓存命中：返回答案与来源</text>
-
-  <path d="M 710 1016 L 1080 1016 L 1080 1080 L 1151 1080" fill="none" stroke="#B45309" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 1152 1080 L 1140 1075 L 1140 1085 Z" fill="#B45309" stroke="none"/>
-  <rect x="792" y="1058" width="272" height="28" rx="4" fill="#F8FAFC" stroke="none"/>
-  <text x="928" y="1078" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#B45309">重试用尽：明确说明当前证据不足</text>
-
-  <!-- 九个学习节点 -->
-  <rect x="490" y="100" width="220" height="72" rx="8" fill="#E5ECFD" stroke="#2563EB" stroke-width="2"/>
-  <text x="600" y="132" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="600" dy="0">1 规划器选择数据源</tspan><tspan x="600" dy="20">为每个来源改写查询</tspan></text>
-
-  <rect x="104" y="292" width="220" height="72" rx="8" fill="#F8FAFC" stroke="#2563EB" stroke-width="2"/>
-  <text x="214" y="324" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="214" dy="0">2 知识库检索</tspan><tspan x="214" dy="20">Chroma 读取方法资料</tspan></text>
-
-  <rect x="490" y="292" width="220" height="72" rx="8" fill="#F8FAFC" stroke="#2563EB" stroke-width="2"/>
-  <text x="600" y="324" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="600" dy="0">3 新闻混合检索</tspan><tspan x="600" dy="20">API 召回·向量重排</tspan></text>
-
-  <rect x="876" y="292" width="220" height="72" rx="8" fill="#F8FAFC" stroke="#2563EB" stroke-width="2"/>
-  <text x="986" y="324" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="986" dy="0">4 公开网络检索</tspan><tspan x="986" dy="20">只在计划选中时执行</tspan></text>
-
-  <rect x="490" y="476" width="220" height="72" rx="8" fill="#E5ECFD" stroke="#2563EB" stroke-width="2"/>
-  <text x="600" y="508" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="600" dy="0">5 收集器合并证据</tspan><tspan x="600" dy="20">保留来源并去除重复</tspan></text>
-
-  <rect x="490" y="640" width="220" height="72" rx="8" fill="#E5ECFD" stroke="#2563EB" stroke-width="2"/>
-  <text x="600" y="672" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="600" dy="0">6 评估器筛选证据</tspan><tspan x="600" dy="20">决定生成·改写·回退</tspan></text>
-
-  <rect x="96" y="804" width="220" height="72" rx="8" fill="#F6EAE1" stroke="#B45309" stroke-width="2"/>
-  <text x="206" y="836" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="206" dy="0">7 改写器优化查询</tspan><tspan x="206" dy="20">不超过 MAX_RETRIES</tspan></text>
-
-  <rect x="490" y="804" width="220" height="72" rx="8" fill="#E5ECFD" stroke="#2563EB" stroke-width="2"/>
-  <text x="600" y="836" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="600" dy="0">8 生成器组织答案</tspan><tspan x="600" dy="20">可复用证据版本缓存</tspan></text>
-
-  <rect x="490" y="968" width="220" height="72" rx="8" fill="#F6EAE1" stroke="#B45309" stroke-width="2"/>
-  <text x="600" y="1000" text-anchor="middle" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="700" fill="#0F172A"><tspan x="600" dy="0">9 核验器检查依据</tspan><tspan x="600" dy="20">通过·重试·诚实拒答</tspan></text>
-
-  <text x="48" y="1144" text-anchor="start" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif" font-size="16" font-weight="400" fill="#64748B">终端显示的是节点决策与可验证摘要，不展示模型隐藏的逐字思维链。</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1068" viewBox="0 0 1200 1068" role="img" aria-label="基础模式受控 RAG 流程">
+<title>基础模式受控 RAG 流程</title>
+<desc>RESEARCH_ENABLED=false 时：CLI 提交新问题，路由规划，三种检索工具受控取证，筛选器判单篇相关性，评估器判整批充分性，生成器组织答案，评审检查依据和任务。缺口补搜回到取证，重写只回到生成；预算耗尽交付限制说明。跳过长期记忆、分段阅读和专题任务，CLI 仍有检查点和运行记录。精确节点边表见 reference.md。</desc>
+<rect x="0" y="0" width="1200" height="1068" fill="#FFFFFF"/>
+<path d="M 600 120 L 600 165" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 176 L 595 164 L 605 164 Z" fill="#475569"/>
+<text x="620" y="152" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">问题与研究编号</text>
+<path d="M 600 248 L 600 293" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 304 L 595 292 L 605 292 Z" fill="#475569"/>
+<text x="620" y="280" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">来源、查询词与日期</text>
+<path d="M 600 376 L 600 421" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 432 L 595 420 L 605 420 Z" fill="#475569"/>
+<text x="620" y="408" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">去重后的材料</text>
+<path d="M 600 504 L 600 549" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 560 L 595 548 L 605 548 Z" fill="#475569"/>
+<text x="620" y="536" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">相关证据与判断缓存</text>
+<path d="M 600 632 L 600 677" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 688 L 595 676 L 605 676 Z" fill="#475569"/>
+<text x="620" y="664" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">证据可用 / 停止补搜</text>
+<path d="M 600 760 L 600 805" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 816 L 595 804 L 605 804 Z" fill="#475569"/>
+<text x="620" y="792" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">候选答案与引用</text>
+<path d="M 600 888 L 600 933" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 944 L 595 932 L 605 932 Z" fill="#475569"/>
+<text x="620" y="920" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">通过 / 耗尽修正预算</text>
+<path d="M 708 596 L 1008 596 L 1008 340 L 719 340 M 708 852 L 1008 852 L 1008 596" fill="none" stroke="#9A3412" stroke-width="2" stroke-linecap="round"/>
+<path d="M 708 340 L 720 335 L 720 345 Z" fill="#9A3412"/>
+<path d="M 492 852 L 240 852 L 240 724 L 481 724" fill="none" stroke="#9A3412" stroke-width="2" stroke-linecap="round"/>
+<path d="M 492 724 L 480 719 L 480 729 Z" fill="#9A3412"/>
+<text x="748" y="584" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#9A3412" text-anchor="start">缺事实且仍有预算</text>
+<text x="748" y="840" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#9A3412" text-anchor="start">需补证据且仍有预算</text>
+<text x="60" y="796" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#9A3412" text-anchor="start">需重写且仍有预算</text>
+<rect x="492" y="48" width="216" height="72" rx="24" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="80" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">CLI 创建新研究</text>
+<text x="600" y="100" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">保存研究编号</text>
+<rect x="492" y="176" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="208" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">路由器规划数据源</text>
+<text x="600" y="228" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">与查询条件</text>
+<rect x="492" y="304" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="336" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">工具执行器受控取证</text>
+<text x="600" y="356" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">并行初搜 / 定向补搜</text>
+<rect x="492" y="432" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="464" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">筛选器判断相关性</text>
+<text x="600" y="484" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">保留相关证据</text>
+<rect x="492" y="560" width="216" height="72" rx="8" fill="#F3E7E3" stroke="#9A3412" stroke-width="2"/>
+<text x="600" y="592" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">评估器核对充分性</text>
+<text x="600" y="612" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">决定生成或补事实</text>
+<rect x="492" y="688" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="720" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">生成器组织答案</text>
+<text x="600" y="740" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">或复用通过的缓存</text>
+<rect x="492" y="816" width="216" height="72" rx="8" fill="#F3E7E3" stroke="#9A3412" stroke-width="2"/>
+<text x="600" y="848" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">评审器检查依据</text>
+<text x="600" y="868" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">与任务完成度</text>
+<rect x="492" y="944" width="216" height="72" rx="24" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="976" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">CLI 交付核验回答</text>
+<text x="600" y="996" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">未通过则说明限制</text>
 </svg>

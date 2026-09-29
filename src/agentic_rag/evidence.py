@@ -6,6 +6,17 @@ import re
 from langchain_core.documents import Document
 
 
+def numbered_sentences(text: str) -> tuple[dict[str, tuple[int, int]], str]:
+    """阅读和回读共享的句子编号；位置始终对应未改写的输入原文。"""
+    sentences = {}
+    for match in re.finditer(r"[^。！？；\n]+[。！？；]?", text):
+        for start in range(match.start(), match.end(), 400):
+            end = min(start + 400, match.end())
+            sentences[f"S{len(sentences)+1}"] = (start, end)
+    rendered = "\n".join(f"[{sid}] {text[start:end]}" for sid, (start, end) in sentences.items())
+    return sentences, rendered
+
+
 def document_key(document: Document) -> str:
     return hashlib.sha256(document.page_content.encode("utf-8")).hexdigest()
 

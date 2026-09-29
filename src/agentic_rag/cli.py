@@ -100,7 +100,19 @@ class TracePrinter:
     def show_event(self, event: dict[str, Any]) -> None:
         """实时显示已提交的 API 参数和观测结果；事件不含认证请求头。"""
         kind = event.get("kind")
-        if kind == "research":
+        if kind == "tool":
+            call_id = event.get("tool_call_id", "")[:12]
+            print(f"  [工具 {event.get('tool', '')} · {call_id}]")
+            if event.get("phase") == "started":
+                print(f"    调用参数：{json.dumps(event.get('arguments', {}), ensure_ascii=False)}")
+            elif event.get("phase") == "finished":
+                labels = {"ok": "成功", "empty": "正常零结果", "degraded": "降级返回", "error": "失败"}
+                print(f"    结果：{labels.get(event.get('status'), event.get('status'))}；证据 {event.get('count', 0)} 条；耗时 {event.get('elapsed', 0):.3f} 秒")
+                for warning in event.get("warnings", []):
+                    print(f"    提醒：{_display(warning)}")
+            else:
+                print(f"    失败：{event.get('error_type', '')}；{_display(event.get('error', ''))}")
+        elif kind == "research":
             name = event.get("event")
             labels = {"queued": "排队", "started": "已领取", "waiting_llm": "等待模型槽位",
                       "running_llm": "模型请求执行中", "waiting_io": "等待网络槽位", "running_io": "网络请求执行中",
@@ -309,7 +321,7 @@ def run_with_trace(graph, question: str, *, verbose: bool = False, run_id=None, 
                 if (state["model_revision"] != model_revision()
                         or state.get("reading_recipe") != recipe(state["model_revision"])
                         or state.get("workflow_revision") != WORKFLOW_VERSION):
-                    raise ValueError("模型版本或上下文配置已变化，请发起新研究，避免混用旧检查点")
+                    raise ValueError("模型、配置或工作流版本已变化，请发起新研究，避免混用旧检查点")
             input_state = None
     for mode, event in graph.stream(input_state, stream_mode=["updates", "custom"], **options):
         if mode == "custom":
@@ -364,7 +376,7 @@ def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=Fals
                         if (snapshot.values["model_revision"] != model_revision()
                                 or snapshot.values.get("reading_recipe") != recipe(snapshot.values["model_revision"])
                                 or snapshot.values.get("workflow_revision") != WORKFLOW_VERSION):
-                            raise ValueError("模型版本或配置已变化，请发起新研究")
+                            raise ValueError("模型、配置或工作流版本已变化，请发起新研究；兼容的阅读成果仍可复用")
                 stack.enter_context(run_lease(database, run_id, question))
                 acquired = True
                 if retry_failed:
@@ -425,6 +437,7 @@ def main() -> None:
     parser.add_argument("--retry-failed", action="store_true", help="与 --resume 配合，重新尝试失败子任务")
     parser.add_argument("--inspect-reading", metavar="READING_ID", help="查看阅读成果、原文位置与版本")
     parser.add_argument("--repair-memory", action="store_true", help="仅重试向量投影，不重新阅读")
+    parser.add_argument("--list-tools", action="store_true", help="查看实际注册的工具及参数，不调用模型或初始化数据库")
     parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="Show additional exception details; queries and time choices are always shown",
@@ -434,6 +447,12 @@ def main() -> None:
         parser.error("--resume 不能同时提交新问题")
     if args.retry_failed and not args.resume:
         parser.error("--retry-failed 需要 --resume")
+    if args.list_tools:
+        from .tools import TOOLS
+        print(json.dumps([{"name": item.name, "description": item.description,
+                           "input_schema": item.tool_call_schema.model_json_schema()} for item in TOOLS],
+                         ensure_ascii=False, indent=2))
+        return
     from .research.service import store
     database = store()
     if args.runs or args.status or args.inspect_reading or args.repair_memory:

@@ -1,0 +1,14 @@
+name: Documentation consistency
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check documented code facts and review state
+        run: python scripts/docs_sync.py --check
