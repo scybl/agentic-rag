@@ -1,0 +1,34 @@
+[
+  {
+    "question": "What are the three stages of a classic RAG pipeline?",
+    "ground_truth": "A classic RAG pipeline has three stages: ingestion (documents are chunked, embedded and stored in a vector database), retrieval (the query is embedded and the most similar chunks are fetched) and generation (the LLM answers using the retrieved chunks as context)."
+  },
+  {
+    "question": "What is retrieval grading in agentic RAG and why is it useful?",
+    "ground_truth": "Retrieval grading uses a grader LLM to inspect each retrieved chunk and give a binary relevance judgment. Irrelevant chunks are discarded before generation, reducing context dilution and hallucinations, and if no chunk survives the system knows retrieval failed and can react."
+  },
+  {
+    "question": "When is RAG preferred over fine-tuning?",
+    "ground_truth": "RAG is preferred when knowledge changes frequently, when sources must be citable, or when data cannot be baked into model weights for privacy reasons. Updating RAG only requires re-indexing, while fine-tuning requires training runs."
+  },
+  {
+    "question": "What does the faithfulness metric in RAGAS measure?",
+    "ground_truth": "Faithfulness measures whether the generated answer is supported by the retrieved context. It decomposes the answer into individual claims and verifies each one against the context; low faithfulness indicates hallucination."
+  },
+  {
+    "question": "What does it mean if a RAG system has low context recall but high faithfulness?",
+    "ground_truth": "It means retrieval is the bottleneck: the retrieved context is missing information needed for the reference answer, but the model honestly answers from the incomplete evidence it was given."
+  },
+  {
+    "question": "How does an agentic RAG system react when retrieval fails, and how does it guarantee termination?",
+    "ground_truth": "It rewrites the query (expanding acronyms, adding synonyms, making intent explicit) and retries retrieval. The number of rewrite attempts is bounded, for example two retries, after which it falls back to an alternative source such as web search, so the loop always terminates."
+  },
+  {
+    "question": "What is a common starting point for chunk size and overlap when chunking documents?",
+    "ground_truth": "A common starting point is 500 to 1000 characters per chunk with an overlap of 10 to 20 percent, using recursive character splitting that breaks on paragraphs first, then sentences, then words."
+  },
+  {
+    "question": "Why should a RAGAS evaluation dataset include questions that are not answerable from the knowledge base?",
+    "ground_truth": "To verify the system says 'I don't know' instead of hallucinating when the knowledge base does not contain the answer."
+  }
+]

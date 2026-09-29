@@ -1,0 +1,42 @@
+[project]
+name = "agentic-rag"
+version = "0.1.0"
+description = "Multi-source agentic RAG built with LangGraph: adaptive routing, retrieval grading, self-correction and RAGAS evaluation. 100% open source, runs on CPU."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "bizare" }]
+keywords = ["rag", "langgraph", "langchain", "agents", "ollama", "ragas"]
+
+dependencies = [
+    "langgraph>=0.2",
+    "langgraph-checkpoint-sqlite>=3.0,<4",
+    "langchain-core>=0.3",
+    # 限制在 0.4 以下：ragas 会导入已在 0.4 中移除的 langchain_community.chat_models.vertexai
+    "langchain-community>=0.3,<0.4",
+    "langchain-text-splitters>=0.3",
+    "langchain-ollama>=0.2",
+    "ollama>=0.6",
+    "httpx>=0.27",
+    "langchain-huggingface>=0.1",
+    "langchain-chroma>=0.1",
+    "sentence-transformers>=3.0",
+    "ddgs>=9.0",
+    "pypdf>=5.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+eval = ["ragas>=0.4", "datasets>=2.0", "pandas>=2.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+agentic-rag = "agentic_rag.cli:main"
+agentic-rag-ingest = "agentic_rag.ingestion:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

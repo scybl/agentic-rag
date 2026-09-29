@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1072" viewBox="0 0 1200 1072" role="img" aria-label="持久化多 Agent 研究流程">
+<title>持久化多 Agent 研究流程</title>
+<desc>CLI 提交或恢复研究，路由规划，检索并行收集，阅读 Agent 保存引用和版本，研究 Agent 评估缺口并专题分析，生成器给出条件判断，评审核验；预算内可补搜或重写，最终展示结果及限制。</desc>
+<rect x="0" y="0" width="1200" height="1072" fill="#FFFFFF"/>
+<path d="M 600 120 L 600 165" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 176 L 595 164 L 605 164 Z" fill="#475569"/>
+<text x="620" y="152" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">问题与研究编号</text>
+<path d="M 600 248 L 600 293" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 304 L 595 292 L 605 292 Z" fill="#475569"/>
+<text x="620" y="280" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">来源、查询词与日期</text>
+<path d="M 600 376 L 600 421" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 432 L 595 420 L 605 420 Z" fill="#475569"/>
+<text x="620" y="408" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">去重后的材料</text>
+<path d="M 600 504 L 600 549" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 560 L 595 548 L 605 548 Z" fill="#475569"/>
+<text x="620" y="536" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">可追溯的阅读成果</text>
+<path d="M 600 632 L 600 677" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 688 L 595 676 L 605 676 Z" fill="#475569"/>
+<text x="620" y="664" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">证据可用 / 停止补搜</text>
+<path d="M 600 760 L 600 805" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 816 L 595 804 L 605 804 Z" fill="#475569"/>
+<text x="620" y="792" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">候选答案与引用</text>
+<path d="M 600 888 L 600 933" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 944 L 595 932 L 605 932 Z" fill="#475569"/>
+<text x="620" y="920" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">通过 / 耗尽修正预算</text>
+<path d="M 708 596 L 1008 596 L 1008 340 L 719 340 M 708 852 L 1008 852 L 1008 596" fill="none" stroke="#9A3412" stroke-width="2" stroke-linecap="round"/>
+<path d="M 708 340 L 720 335 L 720 345 Z" fill="#9A3412"/>
+<path d="M 492 852 L 240 852 L 240 724 L 481 724" fill="none" stroke="#9A3412" stroke-width="2" stroke-linecap="round"/>
+<path d="M 492 724 L 480 719 L 480 729 Z" fill="#9A3412"/>
+<text x="748" y="584" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#9A3412" text-anchor="start">缺事实且仍有预算</text>
+<text x="748" y="840" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#9A3412" text-anchor="start">需补证据且仍有预算</text>
+<text x="60" y="796" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#9A3412" text-anchor="start">需重写且仍有预算</text>
+<rect x="492" y="48" width="216" height="72" rx="24" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="80" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">CLI 接收问题</text>
+<text x="600" y="100" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">或恢复研究</text>
+<rect x="492" y="176" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="208" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">路由器规划数据源</text>
+<text x="600" y="228" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">与查询条件</text>
+<rect x="492" y="304" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="336" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">检索器并行取资料</text>
+<text x="600" y="356" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">合并新闻与长期记忆</text>
+<rect x="492" y="432" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="464" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">阅读 Agent 处理分段</text>
+<text x="600" y="484" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">保存引用与正文版本</text>
+<rect x="492" y="560" width="216" height="72" rx="8" fill="#F3E7E3" stroke="#9A3412" stroke-width="2"/>
+<text x="600" y="592" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">研究 Agent 核对缺口</text>
+<text x="600" y="612" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">并行分析与原文回读</text>
+<rect x="492" y="688" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="720" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">生成器综合证据</text>
+<text x="600" y="740" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">给出条件判断</text>
+<rect x="492" y="816" width="216" height="72" rx="8" fill="#F3E7E3" stroke="#9A3412" stroke-width="2"/>
+<text x="600" y="848" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">评审器检查依据</text>
+<text x="600" y="868" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">与任务完成度</text>
+<rect x="492" y="944" width="216" height="72" rx="24" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
+<text x="600" y="976" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">CLI 展示核验结果</text>
+<text x="600" y="996" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">或预算耗尽的限制</text>
+</svg>
