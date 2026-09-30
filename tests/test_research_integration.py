@@ -8,7 +8,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from agentic_rag.graph import nodes
 from agentic_rag.graph.build import build_graph
-from agentic_rag.graph.chains import EvidenceAssessment, AnswerAssessment
+from agentic_rag.graph.chains import EvidenceAssessment, AnswerAssessment, DocumentAssessment
 from agentic_rag.research import service
 from agentic_rag.research.store import ResearchStore
 
@@ -21,6 +21,7 @@ class NoIndex:
 def test_checkpoint_reopens_and_continues_without_rerunning_completed_nodes(tmp_path):
     database = ResearchStore(tmp_path / "research.sqlite")
     doc = Document(page_content="近期供给减少。", metadata={"source_type": "news_api", "article_id": "a", "title": "供给变化"})
+    noise = Document(page_content="手机发布。", metadata={"source_type": "news_api", "article_id": "noise", "title": "无关手机"})
     config = {"configurable": {"thread_id": "recover"}, "recursion_limit": 100}
     reads = []
     real_read = service.read_documents
@@ -37,15 +38,18 @@ def test_checkpoint_reopens_and_continues_without_rerunning_completed_nodes(tmp_
           patch.object(service, "read_documents", side_effect=read_node),
           patch.object(service, "dispatch_specialists", return_value={"next_action": "generate", "specialist_findings": []}),
           patch.object(nodes, "route", return_value={"task_type": "forecast", "selected_sources": ["news_api"], "retries": 0}),
-          patch.object(nodes, "collect_sources", return_value={"documents": [doc]}) as collect,
+          patch.object(nodes, "collect_sources", return_value={"documents": [doc, noise]}) as collect,
           patch.object(nodes, "get_document_grader") as grader,
           patch.object(nodes, "get_evidence_assessor") as assessor,
           patch.object(nodes, "get_generator") as generator,
           patch.object(nodes, "get_answer_reviewer") as reviewer,
           patch.object(nodes, "AnalysisCache") as cache):
-        grader.return_value.invoke.return_value = "yes"
+        grader.return_value.batch.return_value = [
+            DocumentAssessment(decision="keep", subject_match="driver", evidence_role="fact", reason="供给事实"),
+            DocumentAssessment(decision="exclude", subject_match="different", evidence_role="noise", reason="无关手机")]
         assessor.return_value.invoke.return_value = EvidenceAssessment(ready=True, usable_evidence_ids=["E1"], covered_factors=["供给"], missing_factors=[], news_queries=[], web_queries=[], summary="可作条件推断")
-        reviewer.return_value.invoke.return_value = AnswerAssessment(decision="accept", grounded=True, answers_question=True, needs_more_evidence=False, issues=[], revision_instructions="", news_queries=[], web_queries=[])
+        reviewer.return_value.invoke.return_value = AnswerAssessment(decision="accept", grounded=True, answers_question=True, needs_more_evidence=False, issues=[], revision_instructions="", news_queries=[], web_queries=[],
+            concern_checks=[{"concern_id": f"C{i}", "addressed": True, "explanation": "测试替身：答案已回应"} for i in range(1, 6)])
         cache.return_value.get.return_value = None
         generator.return_value.invoke.side_effect = [RuntimeError("模拟模型故障"), "若供给继续收缩，价格可能上行 [E1]。"]
         path = str(tmp_path / "checkpoint.sqlite")
@@ -59,6 +63,8 @@ def test_checkpoint_reopens_and_continues_without_rerunning_completed_nodes(tmp_
             result = build_graph(checkpointer=saver, research=True).invoke(None, config)
         assert result["generation_complete"] and result["generation_grounded"]
         assert collect.call_count == 1 and len(reads) == 1
+        assert grader.return_value.batch.call_count == 1
+        assert len(database.tasks("recover")) == 1  # 被排除的手机没有进入阅读调度。
 
 
 def test_specialist_can_request_original_once_and_reuses_across_runs(tmp_path):

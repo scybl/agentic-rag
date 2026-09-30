@@ -6,9 +6,11 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass, field
+from contextvars import copy_context
 
 from ..config import settings
 from .runtime import task_context
+from ..token_usage import active_task
 
 
 @dataclass
@@ -35,7 +37,11 @@ class Scheduler:
         self.queue = queue.SimpleQueue()
 
     def emit(self, kind, data=None, spec=None):
-        event = {"kind": "research", "event": kind, "run_id": self.run_id, **(data or {})}
+        if kind == "tool":
+            # 工具事件保持统一顶层格式，终端才能展示工具、调用者和理由；任务身份在此补齐。
+            event = {"run_id": self.run_id, **(data or {}), "kind": "tool"}
+        else:
+            event = {"kind": "research", "event": kind, "run_id": self.run_id, **(data or {})}
         if spec:
             event.update(task_id=spec.key[:12], task_key=spec.key, role=spec.kind,
                          goal=spec.payload.get("goal", ""))
@@ -53,6 +59,9 @@ class Scheduler:
             if row["status"] == "complete":
                 self.emit("reused", spec=spec)
                 return row["result"]
+            if row["status"] == "failed" and not row.get("retryable", True):
+                self.emit("failed", {"error": row["error"], "retry_skipped": True}, spec)
+                return None
             if row["attempts"] >= self.attempts and row["status"] != "running":
                 self.emit("failed", {"error": row["error"] or "超过尝试上限"}, spec)
                 return None
@@ -64,7 +73,11 @@ class Scheduler:
                 continue
             self.emit("started", spec=spec)
             token = task_context.set({"emit": lambda kind, data: self.emit(kind, data, spec),
-                                      "cancel": self.cancel, "deadline": deadline})
+                                      "cancel": self.cancel, "deadline": deadline,
+                                      "task_id": spec.key, "role": spec.kind,
+                                      "goal": spec.payload.get("goal", "")})
+            usage_token = active_task.set({"task_id": spec.key, "task_kind": spec.kind,
+                                           "task_attempt": row["attempts"] + 1})
             try:
                 result = handler(spec.payload)
                 if self.cancel.is_set() or time.monotonic() > deadline:
@@ -76,7 +89,11 @@ class Scheduler:
             except Exception as exc:
                 self.store.fail(spec.key, self.owner, exc)
                 self.emit("attempt_failed", {"error": str(exc)[:500]}, spec)
+                if getattr(exc, "retryable", True) is False:
+                    self.emit("failed", {"error": str(exc)[:500], "retry_skipped": True}, spec)
+                    return None
             finally:
+                active_task.reset(usage_token)
                 task_context.reset(token)
         return None
 
@@ -106,7 +123,7 @@ class Scheduler:
                     # 依赖在主线程检查，避免工作池全被“等待依赖”的线程占满。
                     dependencies = [self.store.task(dep) for dep in spec.dependencies]
                     if all(dep and dep["status"] == "complete" for dep in dependencies):
-                        future = pool.submit(self._execute, spec, handlers[spec.kind], deadline)
+                        future = pool.submit(copy_context().run, self._execute, spec, handlers[spec.kind], deadline)
                         active[future] = key
                         del pending[key]
                 self.store.renew(self.owner, self.lease)

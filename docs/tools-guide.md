@@ -1,6 +1,6 @@
 # 工具层的边界与实际调用
 
-当前工具层暴露四种取证能力。它们使用真正的 LangChain `@tool`、参数 Schema 和 `ToolMessage`，已经接入首次检索、后续补搜与专题回读，不是装饰性的演示代码。
+当前工具层包含四种取证能力和四种确定性规则工具。它们使用真正的 LangChain `@tool`、参数 Schema 和 `ToolMessage`，已经接入首次检索、后续补搜、专题回读、模型输出校验、自适应重试、概率证据检查和答案交付检查，不是装饰性的演示代码。
 
 本文解释边界；输入声明和注册信息由[代码事实参考](reference.md)随源码生成，运行操作见[运行指南](operations.md)，待修问题集中在[当前状态](status.md)。
 
@@ -11,29 +11,40 @@
 | 工具 | 负责什么 | 谁实际调用 | 明确不负责什么 |
 |---|---|---|---|
 | `search_knowledge` | 检索稳定知识与方法，返回原始文档片段 | `retrieve` 节点 | 最新新闻、答案生成、索引增量策略 |
-| `search_news` | 校验查询条件，调用既有混合新闻检索服务，转换成统一证据 | `news_api` 节点，首次收集和补搜共用 | 自行决定日期、再次设计分页和向量缓存 |
+| `search_news` | 校验新闻参数类型/日期，执行实际查询组，按时间、栏目与来源过滤，返回候选评分及预算内正文 | `news_api` 节点，首次收集和补搜共用 | 自行放宽条件、从人物/主题标签自动另造查询 |
 | `search_web` | 获取公开网页摘要并保留网址，明确报告网络失败 | `web_search` 节点，首次收集和补搜共用 | 声称摘要是网页全文 |
-| `read_news` | 回读当前证据中的已保存新闻版本，给出精确位置 | 专题 Agent 请求回读时 | 任意路径访问、重新抓取、无限回读 |
+| `read_news` | 回读当前证据中的已保存新闻版本，给出精确位置 | 专题请求，或主流程概率证据不足时 | 任意路径访问、重新抓取、无限回读 |
+| `validate_model_output` | 按目标 Pydantic Schema 或非空文本契约检查每次模型返回，列出字段路径和原因 | 所有模型链由程序强制调用 | 生成或猜测缺失字段、替代语义质量评审 |
+| `plan_model_retry` | 根据失败类型、已用 token、上下文余量和硬上限选择扩容、延时、关闭思考、切分或停止 | 模型失败后由统一反馈环调用 | 无限提高资源、掩盖客户端/程序错误 |
+| `validate_probability_evidence` | 检查概率问题是否具有数值、方法和非搜索摘要的直接证据 | `assess_evidence` 节点强制调用 | 用宏观观点代替概率数据、生成概率 |
+| `validate_probability_answer` | 检查事件、时点、0–100%数值、方法、引用和证据契约 | `evaluate_generation` 节点强制调用 | 替代事实核验或决定宏观逻辑是否合理 |
 
-这四项都有明确输入、可观察的取证结果，也可能由不同流程复用。调度器、阅读成果入库、向量补写、相关性评估与答案反思没有为了凑数量注册成工具：前几项是运行基础设施，后几项是模型判断和流程控制。
+八项工具都有明确输入和可观察结果。输出校验及概率契约由程序强制执行，自适应工具只在模型失败后执行；模型不能选择跳过应执行的规则。它们只处理适合确定性判断的契约，复杂的证据解释仍由模型评审。调度器、阅读成果入库、向量补写和一般相关性评估没有为了凑数量注册成工具。
+
+工具目录同时维护每项工具的默认调用者和适用条件。规划完成后，程序会为全部八项工具生成 `required / conditional / skipped` 决策；终端逐项解释。模型输出校验始终是 `required`，自适应重试是 `conditional`，其余不适用工具不会为了提高调用数量而运行，但不能静默消失。`--list-tools` 也会显示这些调用策略。
 
 ## 一次问题实际怎样经过工具
 
-1. `route` 用结构化输出选择数据源、查询词、日期和核对因素。规划提示中的工具目录由真实工具定义生成，避免描述与代码各写一套。
-2. `collect_sources` 在有限线程池中调用原有三个来源节点。节点只翻译输入与写回状态，不再处理新闻记录转换或直接操作外部客户端。
-3. `execute_tool` 校验参数，创建调用编号，发送真正的 `ToolCall` 给对应 `BaseTool.invoke`。
-4. 工具调用原有领域服务。分页、候选排序、缓存复用与网络并发仍由相应服务控制，不在新工具层重复实现。
-5. 返回的 `ToolMessage.content` 是有界预览；`artifact` 保留完整 `Document`、原文片段、警告与新闻事件。图节点消费完整证据，不拿预览代替正文。
-6. 需要补搜时仍经过同一工具入口。专题需要回读时，程序注入本次 E 编号到新闻版本的映射，执行 `read_news` 后把原文交给同一个专题继续分析。
+1. 每个模型链声明目标输出类型；结构化链另声明允许/必填字段和“禁止额外字段”，通过 Ollama 原生 `json_schema` 约束生成。非截断响应由 `validate_model_output` 独立复核，文本链检查非空文本，不要求答案本身是 JSON。
+2. 结构错误、空输出、截断、请求超时及可恢复服务故障进入 `plan_model_retry`。工具根据实际输入/输出 token 与硬上限选择反馈修正、临时扩容、延长超时、关闭思考、切分输入或停止；半截长输出不会回塞扩大下一次上下文。
+3. `route` 用通过校验的结构化输出选择数据源、查询词、日期和核对因素。规划提示中的工具目录由真实工具定义生成，避免描述与代码各写一套。
+4. `collect_sources` 在有限线程池中调用原有三个来源节点。节点只翻译输入与写回状态，不再处理新闻记录转换或直接操作外部客户端。
+5. `execute_tool` 先强制要求调用者和调用理由，再校验参数、创建调用编号，发送真正的 `ToolCall` 给对应 `BaseTool.invoke`。
+6. 工具调用原有领域服务。分页、候选排序、缓存复用与网络并发仍由相应服务控制，不在新工具层重复实现。
+7. 返回的 `ToolMessage.content` 是有界预览；`artifact` 保留完整 `Document`、原文片段、警告与新闻事件。图节点消费完整证据，不拿预览代替正文。
+8. 需要补搜时仍经过同一工具入口。专题需要回读时，程序注入本次 E 编号到新闻版本的映射，执行 `read_news` 后把原文交给同一个专题继续分析。
+9. 概率任务在生成前执行证据契约，在交付前执行答案契约。搜索摘要、宏观新闻或机构方向观点不能单独让概率问题通过。
+10. 政策利率概率题会强制规划三种取证工具。初次概率证据契约未通过且已有持久化新闻版本时，主流程先执行 `read_news` 定向回读概率数值、方法和数据时点，再重新执行证据契约；仍不足才进入联网补搜。
 
 `tool_call_id` 是本项目执行器生成的真实调用关联号，不是模型输出的思维过程。它把开始、API 中间事件、完成或失败串起来；不能单凭这个字段宣称实现了通用 ReAct。
 
 ## 目录职责
 
-- [tools/__init__.py](../src/agentic_rag/tools/__init__.py)：四个工具的显式目录，以及数据源到工具的映射。没有插件扫描或动态注册框架。
-- [tools/contracts.py](../src/agentic_rag/tools/contracts.py)：公共输入规则、程序注入的 `ToolContext`、完整证据 `EvidenceBundle`。
+- [tools/__init__.py](../src/agentic_rag/tools/__init__.py)：取证工具与规则工具的显式目录，以及数据源到工具的映射。没有插件扫描或动态注册框架。
+- [tools/contracts.py](../src/agentic_rag/tools/contracts.py)：公共输入规则、程序注入的 `ToolContext`、完整证据、规则结果与模型重试计划。
 - [tools/execution.py](../src/agentic_rag/tools/execution.py)：一次调用、真实工具消息与事件。不负责重试、调度或改写用户目标。
-- [tools/knowledge.py](../src/agentic_rag/tools/knowledge.py)、[news.py](../src/agentic_rag/tools/news.py)、[web_search.py](../src/agentic_rag/tools/web_search.py)、[news_reading.py](../src/agentic_rag/tools/news_reading.py)：各能力的输入约束和实现适配。
+- [tools/knowledge.py](../src/agentic_rag/tools/knowledge.py)、[news.py](../src/agentic_rag/tools/news.py)、[web_search.py](../src/agentic_rag/tools/web_search.py)、[news_reading.py](../src/agentic_rag/tools/news_reading.py)：各取证能力的输入约束和实现适配。
+- [tools/guardrails.py](../src/agentic_rag/tools/guardrails.py)：模型输出检查、自适应重试决策、概率任务识别及两项概率契约；只做确定性控制，不生成研究结论。
 - [graph/nodes.py](../src/agentic_rag/graph/nodes.py)：编排与状态更新。`_search_source` 是三个检索节点共用的薄适配。
 - [research/service.py](../src/agentic_rag/research/service.py)：派发任务、阅读复用与专题结果汇总；回读已经交给工具。
 
@@ -41,11 +52,17 @@
 
 ## 参数约束与资源边界
 
-所有公开输入禁止额外字段。知识与网络查询不能为空，新闻支持 1–4 组短关键词；单独的空关键词表示查询最新新闻。日期允许留空，提供日期时校验真实日期与起止顺序，工具不会自己补默认回看期。
+所有公开输入禁止额外字段。知识与网络查询不能为空，新闻支持 1–4 组短关键词；单独的空关键词表示查询最新新闻。新闻指令还包含人物、机构、主题、指定信息源、栏目、自然日或带时区的精确时间、相关性/最新/最早排序、聚焦/综述/尽可能完整覆盖及1–15篇入选上限。工具不会自行补默认回看期或放宽用户条件。指定私有库之外的媒体时，路由还会同时要求 `search_web` 定向核对；来源过滤本身不承诺数据库拥有该媒体。
 
-网页条数限制为 1–10；新闻每页最多 20 条，候选总量仍受配置限制。原文回读最多两个 E 编号、最多 1600 个原文字符；一次专题最多回读一轮仍由研究服务控制。工具输入不暴露 API Key、数据库路径、任意 URL 或版本号。
+人物/机构/主题标签不是三个额外的 API 过滤字段：`SourcePlan` 校验每个非空类别至少有一个代表词出现在实际查询组，随后 `search_news` 执行 `queries`。它不保证每个标签都被覆盖，也不做结果层的全标签 AND 校验。直接手工调用工具时同样应自己提供有效查询组。`coverage` 表示规划的正文覆盖目标；所有模式都全分页，实际正文数由 `result_limit` 决定，不会因 `exhaustive` 自动读完所有文章。
 
-`ToolContext` 由程序通过 `RunnableConfig` 注入，不进入模型看到的 Schema。它只提供事件出口，以及回读所需的证据映射和版本读取函数，不提供整个 GraphState。这是当前单用户流程中的能力边界，不等于多租户鉴权或操作系统沙箱。
+网页条数限制为 1–10；新闻每页最多 20 条，每组查询持续分页直到结束，不按 API 顺序先截断。`result_limit` 只控制本轮 1–15 篇正文预算，所有匹配候选的标题、摘要、元数据、权重及选择状态通过 artifact 和 `news_candidates` 事件完整返回；模型消息仅展示有界预览和总数，未入选不是无关。相对小时窗口先用自然日粗筛，再按精确发布时间过滤；来源过滤同时核对来源名和网址。原文回读最多两个 E 编号、最多 1600 个原文字符；一次专题最多回读一轮仍由研究服务控制。工具输入不暴露 API Key、数据库路径、任意 URL 或版本号。
+
+阅读优先级采用 70% 向量相关性、20% 标题/摘要 TF-IDF 相似度、10% 查询组覆盖率；没有可用向量时改为 90% TF-IDF、10% 覆盖率，不退回接口顺序。语义距离转换为 `1/(1+max(0,distance))`，这些权重是可审计启发式，不是经过标定的热度、可信度或概率。相关性排序会兼顾各查询组；明确要求最新/最早时尊重时间排序。正文阅读总量仍受后续研究预算约束，检索覆盖说明进入评估与生成上下文，不能声称已阅读全部候选。
+
+`ToolContext` 由程序通过 `RunnableConfig` 注入，不进入模型看到的 Schema。它强制携带 `caller` 和 `reason`，并提供事件出口、模型输出目标 Schema，以及回读所需的证据映射和版本读取函数，不提供整个 GraphState。缺少调用者或理由的调用会在工具执行前被拒绝。这是当前单用户流程中的能力边界，不等于多租户鉴权或操作系统沙箱。
+
+执行器先继承当前 `RunnableConfig`，再合并工具上下文，保留流写入器、检查点命名空间与回调。不能用只有 `tool_context` 的新配置覆盖，否则图内补搜的事件可能抛出 `checkpoint_ns` 错误；测试覆盖 SQLite 恢复后的真实自定义流路径。
 
 输入校验在执行前完成；原文工具先检查所有 E 编号，再开始读取。不同任务各自传入上下文，未使用全局可变的“当前研究”变量。
 
@@ -61,7 +78,11 @@
 
 本次修正了公开搜索吞掉异常并返回空列表的问题。现在网络故障会抛出明确的 `ToolException`，在终端和来源错误中可见。
 
-工具执行器不额外重试，避免与模型和任务层叠加。既有模型重试对 HTTP 状态分类不足的问题仍待单独修复，不能把本次封装说成已经解决所有重试问题。事件只记录公开参数，不记录认证请求头或运行上下文；它仍不是完整的隐私脱敏与审计系统。
+工具执行器本身不重试；模型反馈环集中处理输出与可恢复传输故障，客户端错误和未知错误不会靠扩大资源掩盖。任务调度器仍负责进程级失败与持久恢复。事件只记录有界参数，不记录认证请求头；它仍不是完整的隐私脱敏与审计系统。
+
+自适应尝试次数由 `LLM_ADAPTIVE_MAX_ATTEMPTS` 控制；动态输出、上下文和单次请求时间分别受 `LLM_ADAPTIVE_MAX_OUTPUT_TOKENS`、`LLM_ADAPTIVE_MAX_CONTEXT_WINDOW`、`LLM_ADAPTIVE_MAX_REQUEST_TIMEOUT` 限制。它们是硬上限，不是每次请求的固定配置。批量研究的 `RESEARCH_TIMEOUT` 仍是可恢复调度边界，不会被单个模型自行延长。
+
+模型链实际尝试上限取 `LLM_MAX_ATTEMPTS` 与自适应次数的较小值。低于首轮参数的 adaptive 值不会把已配置首轮请求压小；参数组合需一起调整。规则的概率检测主要依赖关键词、材料类型和格式，不校准概率或证明统计口径一致；详见状态页。
 
 ## 如何观察和单独验证
 
@@ -78,16 +99,18 @@ agentic-rag --list-tools
 agentic-rag "分析近期生猪新闻对价格的影响"
 ```
 
-终端会出现如下格式的真实运行事件，下面只演示字段，并非一次真实新闻执行记录：
+加 `-v` 时可见如下详细事件格式；默认视图保留调用者/理由、结果、异常、查询条件和入选评分，但不逐行展开全部参数。下面只演示字段，并非一次真实新闻执行记录：
 
 ```text
 [工具 search_news · 调用编号]
-  调用参数：{"semantic_query": "...", "queries": ["生猪"], "start": "", "end": "", "section": ""}
+  调用者：主流程/首次证据收集
+  使用原因：按研究计划取得近期新闻事实
+  调用参数：{"semantic_query":"...","queries":["马斯克 AI"],"people":["马斯克"],"organizations":[],"topics":["AI"],"source_names":["路透"],"published_after":"2026-09-29T12:00:00+08:00","published_before":"2026-09-30T12:00:00+08:00","section":"科技","sort_by":"newest","coverage":"broad","result_limit":10}
 [工具 search_news · 相同调用编号]
   结果：成功/正常零结果/降级返回/失败；证据 N 条；耗时 T 秒
 ```
 
-研究模式下可用原来的 `agentic-rag --status RUN_ID` 查询落盘的工具事件。搜索事件在图线程输出；专题回读的事件还带所属任务标识，避免工作线程直接抢写终端。
+`agentic-rag --status RUN_ID` 查看摘要，`--status RUN_ID -v` 查看落盘完整事件。搜索事件在图线程输出；专题回读的事件还带所属任务标识，避免工作线程直接抢写终端。工具计数包含规则工具，不等于模型请求次数，也不等于外部搜索次数。
 
 在 Python 中单独调用新闻工具的最小例子如下。它会访问你配置的新闻服务，不会调用问答模型：
 
@@ -95,13 +118,24 @@ agentic-rag "分析近期生猪新闻对价格的影响"
 from agentic_rag.tools import search_news
 from agentic_rag.tools.execution import execute_tool
 
+from agentic_rag.tools.contracts import ToolContext
+
 message = execute_tool(search_news, {
     "semantic_query": "猪肉价格的供需因素",
     "queries": ["生猪", "饲料"],
+    "people": [],
+    "organizations": [],
+    "topics": ["生猪", "饲料"],
+    "source_names": [],
     "start": "",
     "end": "",
+    "published_after": "",
+    "published_before": "",
     "section": "",
-})
+    "sort_by": "relevance",
+    "coverage": "focused",
+    "result_limit": 5,
+}, context=ToolContext(caller="手工诊断", reason="核对新闻工具返回结构"))
 print(message.tool_call_id)
 print(message.content)  # 有界预览
 for document in message.artifact.documents:
@@ -114,6 +148,6 @@ for document in message.artifact.documents:
 
 [test_tools.py](../tests/test_tools.py) 覆盖 Schema、参数拒绝、真实 ToolMessage、完整 artifact、错误与零结果区分、原文白名单和偏移、上下文并发隔离、三来源节点接入、补搜、日志落盘和 CLI 工具目录；专题集成测试验证回读确实调用工具且成果仍可复用。工具升级阶段曾完成 `133 passed, 3 subtests passed`，其中新增 27 项工具测试；这是历史验证，不是随后的最新测试数。当前回归请运行 `python -m pytest -q`。外部 API、模型和搜索服务使用替身，不以离线测试证明真实新闻覆盖率或模型质量。
 
-没有引入新依赖，不需修改 `.env`、重建知识索引或清空已有阅读成果。因专题回读契约变化，专题任务版本与工作流版本已升级：旧版本尚未完成的研究不继续混用新流程，请重新提交问题；原文与兼容的阅读成果仍可复用。完成的旧研究记录不会删除。
+最新候选词法评分新增 `scikit-learn` 依赖，更新代码后执行 `python -m pip install -e ".[dev]"`。不要覆盖 `.env`，无需仅因工具/日志/排序更新重建知识索引或清空阅读成果。模型反馈、阅读/专题规则与全候选检索已升级版本：不兼容的未完成研究需重新提问；原文与兼容阅读成果仍可复用，完成记录不会删除。版本常量以代码参考为准。
 
 参考：[LangChain 官方工具文档](https://docs.langchain.com/oss/python/langchain/tools)。本项目采用已安装的 `langchain_core.tools.tool` 和 `RunnableConfig`，未为了使用较新的运行时包装而另加一套 Agent 框架。

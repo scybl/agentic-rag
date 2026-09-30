@@ -22,10 +22,16 @@ class GraphState(TypedDict, total=False):
     datasource: str  # 兼容展示，例如 "news_api+vectorstore"
     selected_sources: list[str]  # 本轮需要联合查询的一个或多个来源
     source_queries: dict[str, str]  # 针对每个来源生成的专用查询
+    tool_plan: list[dict[str, Any]]  # 全部注册工具本轮的 required/conditional/skipped 决策与理由
     task_type: str  # forecast / analysis / factual
+    estimate_kind: str  # none / directional / level / probability
+    target_event: str  # 概率或阈值预测对应的可判定事件
+    forecast_horizon: str  # 用户要求的预测时点或时间窗口
     evidence_needs: list[str]  # 本题所需的具体证据因素
     query_history: list[str]  # 已实际执行的查询，避免无效重复
-    document_grades: dict[str, bool]  # 同一会话内已筛选的文本指纹
+    subject_terms: list[str]  # 研究实体与直接驱动的字面名称，用于记忆候选过滤
+    subject_scope: str  # 明确行业和对象，避免下游重新混淆同名实体
+    document_grades: dict[str, dict[str, Any]]  # 材料指纹 -> 结构化决定、理由与版本
     evidence_assessment: dict[str, Any]  # 整批证据的充分性、已知与缺口
     pending_news_queries: list[str]  # 针对缺口的待执行新闻查询
     pending_web_queries: list[str]  # 针对缺口的待执行网络查询

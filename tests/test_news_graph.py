@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import ANY, patch
 
 from langchain_core.documents import Document
+from pydantic import ValidationError
 
 from agentic_rag.graph import nodes
 from agentic_rag.graph.chains import NewsTimeSuggestion, SourcePlan
@@ -44,7 +45,77 @@ class NewsGraphTests(unittest.TestCase):
         self.assertEqual(result["plan_summary"], "需要新闻事实和财务分析方法")
         self.assertEqual(result["news_search_plan"]["start"], "")
         self.assertEqual(result["news_search_plan"]["end"], "")
-        self.assertIn("current_date", router.return_value.invoke.call_args.args[0])
+        self.assertIn("current_datetime", router.return_value.invoke.call_args.args[0])
+
+    def test_planner_compiles_people_topic_source_time_sort_and_coverage(self):
+        plan = SourcePlan(
+            task_type="analysis", evidence_needs=["人物表态", "行业影响"],
+            use_knowledge=False, use_news=True, use_web=False, knowledge_query="",
+            news_query="马斯克 AI", additional_news_queries=["特斯拉 人工智能"],
+            news_people=["马斯克"], news_organizations=["特斯拉"], news_topics=["人工智能"],
+            news_sources=["路透"], news_section="科技", news_sort_by="newest",
+            news_coverage="broad", news_result_limit=10,
+            news_time=NewsTimeSuggestion(
+                mode="explicit", start="", end="",
+                published_after="2026-09-29T12:00:00+08:00",
+                published_before="2026-09-30T12:00:00+08:00", reason="用户要求过去24小时"),
+            web_query="", plan_summary="按人物、主题、来源和时间联合查询",
+        )
+        with patch.object(nodes, "get_router") as router:
+            router.return_value.invoke.return_value = plan
+            result = nodes.route({"question": "过去24小时路透关于马斯克和AI的热点"})
+        actual = result["news_search_plan"]
+        assert result["selected_sources"] == ["news_api", "web_search"]
+        assert "路透" in result["source_queries"]["web_search"]
+        assert actual["queries"] == ["马斯克 AI", "特斯拉 人工智能"]
+        assert actual["people"] == ["马斯克"] and actual["organizations"] == ["特斯拉"]
+        assert actual["topics"] == ["人工智能"] and actual["source_names"] == ["路透"]
+        assert actual["sort_by"] == "newest" and actual["coverage"] == "broad"
+        assert actual["result_limit"] == 10
+        assert (actual["start"], actual["end"]) == ("2026-09-29", "2026-09-30")
+
+    def test_planner_rejects_declared_constraints_that_are_not_executable(self):
+        with self.assertRaisesRegex(ValidationError, "没有进入实际查询词"):
+            SourcePlan(
+                task_type="analysis", evidence_needs=["人物动态"],
+                use_knowledge=False, use_news=True, use_web=False, knowledge_query="",
+                news_query="人工智能", additional_news_queries=[], news_people=["马斯克"],
+                news_section="", news_time=NewsTimeSuggestion(
+                    mode="unrestricted", start="", end="", reason="不限时间"),
+                web_query="", plan_summary="查询人物动态",
+            )
+
+    def test_time_schema_normalizes_iso_timestamp_from_date_slots(self):
+        value = NewsTimeSuggestion(
+            mode="explicit", start="2026-09-29T12:00:00+08:00",
+            end="2026-09-30T12:00:00+08:00", reason="过去24小时",
+        )
+        self.assertEqual((value.start, value.end), ("2026-09-29", "2026-09-30"))
+        self.assertEqual(value.published_after, "2026-09-29T12:00:00+08:00")
+        self.assertEqual(value.published_before, "2026-09-30T12:00:00+08:00")
+
+    def test_probability_wording_forces_forecast_and_public_probability_search(self):
+        plan = SourcePlan(
+            task_type="analysis", evidence_needs=["宏观驱动"], additional_news_queries=[],
+            use_knowledge=False, use_news=True, use_web=False, knowledge_query="",
+            news_query="美联储", news_section="",
+            news_time=NewsTimeSuggestion(mode="unrestricted", start="", end="", reason="不限时间"),
+            web_query="", plan_summary="先看宏观驱动",
+        )
+        with patch.object(nodes, "get_router") as router:
+            router.return_value.invoke.return_value = plan
+            result = nodes.route({"question": "预测2027年第二季度，美国降息概率", "reading_recipe": "test"})
+        self.assertEqual(result["estimate_kind"], "probability")
+        self.assertEqual(result["task_type"], "forecast")
+        self.assertEqual(set(result["selected_sources"]), {"vectorstore", "news_api", "web_search"})
+        self.assertIn("计算方法", result["source_queries"]["web_search"])
+        self.assertTrue(any("概率" in need for need in result["evidence_needs"]))
+        decisions = {item["tool"]: item for item in result["tool_plan"]}
+        self.assertTrue(all(decisions[name]["status"] == "required" for name in (
+            "search_knowledge", "search_news", "search_web",
+            "validate_model_output", "validate_probability_evidence", "validate_probability_answer",
+        )))
+        self.assertEqual(decisions["read_news"]["status"], "conditional")
 
     def test_collect_sources_merges_results_and_keeps_partial_success(self):
         knowledge = Document(page_content="财务影响分析方法", metadata={"source": "method.md"})
@@ -101,7 +172,12 @@ class NewsGraphTests(unittest.TestCase):
             api_queries=["生猪"],
             start="2026-09-29",
             end="2026-09-29",
+            published_after="",
+            published_before="",
             section="财经",
+            source_names=[],
+            sort_by="relevance",
+            result_k=5,
             on_event=ANY,
         )
 

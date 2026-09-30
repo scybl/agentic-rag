@@ -47,7 +47,9 @@ def test_reference_ignores_personal_environment(monkeypatch):
 def test_both_graph_modes_are_extracted():
     research = docs.graph_edges(ROOT, True)
     basic = docs.graph_edges(ROOT, False)
-    assert ("supplement_sources", "直接", "read_documents") in research
+    assert ("supplement_sources", "直接", "grade_documents") in research
+    assert ("grade_documents", "直接", "read_documents") in research
+    assert ("read_documents", "直接", "assess_evidence") in research
     assert ("supplement_sources", "直接", "grade_documents") in basic
     assert ("assess_evidence", "generate", "dispatch_specialists") in research
     assert ("evaluate_generation", "finish", "END") in basic
@@ -82,11 +84,15 @@ def test_deleted_document_and_broken_link_are_detected(replica):
 
 
 def test_html_symbol_move_can_be_refreshed(replica):
+    html_path = replica / "docs/code-links.html"
+    line = docs.source_line(replica, {"data-source-path": "src/agentic_rag/tools/news_reading.py", "data-source-symbol": "read_news"})
+    html_path.write_text(f'<a href="../src/agentic_rag/tools/news_reading.py" data-source-path="src/agentic_rag/tools/news_reading.py" '
+                        f'data-source-symbol="read_news" data-source-line="{line}">代码</a><span class="locator">第 {line} 行</span>', encoding="utf-8")
     path = replica / "src/agentic_rag/tools/news_reading.py"
     path.write_text("\n\n" + docs.read(replica, path), encoding="utf-8")
     assert any("代码定位过时" in e for e in docs.validate_links(replica))
-    html = docs.refresh_locations(replica, docs.read(replica, docs.INTERVIEW))
-    (replica / docs.INTERVIEW).write_text(html, encoding="utf-8")
+    html = docs.refresh_locations(replica, docs.read(replica, html_path))
+    html_path.write_text(html, encoding="utf-8")
     assert not any("代码定位过时" in e for e in docs.validate_links(replica))
 
 
@@ -99,13 +105,26 @@ def test_refresh_does_not_acknowledge_review(replica, monkeypatch):
     assert any("[sources]" in e for e in docs.check(replica))
 
 
-def test_original_answer_change_is_not_silently_accepted(replica, monkeypatch):
-    text = docs.read(replica, docs.INTERVIEW)
-    marker = 'data-original="answer">'
-    assert marker in text
-    (replica / docs.INTERVIEW).write_text(text.replace(marker, marker + "篡改原答案", 1), encoding="utf-8")
+@pytest.mark.parametrize("name", ["docs/Agent求职面试题与参考答案.html", "docs/Interview-notes.md", "docs/iNtErViEw/local.html"])
+def test_private_material_is_optional_unread_and_untouched(replica, monkeypatch, name):
+    assert docs.check(replica) == []  # 干净克隆无需个人资料即可检查。
+    path = replica / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\x00private")  # 不是合法 UTF-8：排除必须发生在读取之前。
+    assert docs.inventories(replica) == docs.inventories(ROOT)
     monkeypatch.setattr(docs, "ROOT", replica)
-    assert docs.main(["--acknowledge-review"]) == 1
+    assert docs.main(["--refresh"]) == 0
+    assert docs.main(["--acknowledge-review"]) == 0
+    assert docs.check(replica) == []
+    assert path.read_bytes() == b"\xff\x00private"
+    assert name not in docs.read(replica, docs.LOCK)
+
+
+def test_public_link_to_private_material_is_rejected_even_when_local_file_exists(replica):
+    (replica / "docs/面试笔记.html").write_text("private", encoding="utf-8")
+    path = replica / "docs/index.md"
+    path.write_text(docs.read(replica, path) + "\n[private](面试笔记.html)\n", encoding="utf-8")
+    assert any("公开文档不能依赖" in e for e in docs.validate_links(replica))
 
 
 def test_line_endings_do_not_create_false_drift(replica):
@@ -116,7 +135,7 @@ def test_line_endings_do_not_create_false_drift(replica):
 
 
 def test_broken_html_anchor_is_detected(replica):
-    change(replica, docs.INTERVIEW, 'href="#overview"', 'href="#missing-anchor"')
+    (replica / "docs/code-links.html").write_text('<div id="overview"><a href="#missing-anchor">错误</a></div>', encoding="utf-8")
     assert any("HTML 锚点不存在" in e for e in docs.validate_links(replica))
 
 

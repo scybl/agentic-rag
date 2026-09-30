@@ -7,27 +7,31 @@
 | 你想做什么 | 先读什么 |
 |---|---|
 | 安装、提问、换环境、更新知识 | [运行与维护](operations.md) |
+| 查看每步输入/生成 token、重试消耗和历史累计 | [Token 统计](operations.md#token-统计怎么看) |
 | 理解嵌入、Chroma 和 RAG | [基础概念](rag_fundamentals.md) |
 | 按代码学习完整执行链 | [技术详解](技术细节详解.md) |
 | 理解为什么这样拆分 Agent | [模式与取舍](agentic_rag_patterns.md) |
-| 理解四个工具的实际用途 | [工具层](tools-guide.md) |
+| 理解四项取证与四项规则工具 | [工具层](tools-guide.md) |
 | 理解存储、并发、阅读复用和恢复 | [研究记忆指南](research-memory-guide.md) |
 | 理解预测为何不能只复述资料 | [预测流程](forecast-flow-update.md) |
 | 看命令、配置、工具签名、图的准确边表 | [代码事实参考（自动生成）](reference.md) |
 | 看已完成什么、还缺什么 | [当前状态与已知问题](status.md) |
 | 理解自动测试和效果评估区别 | [RAGAS 评估](evaluation_ragas.md) |
-| 面试逐题对照 | [45 道面试题 HTML](Agent求职面试题与参考答案.html) |
 | 修改代码后更新说明 | [文档维护约定](documentation-maintenance.md) |
 
 ## 两张图分别讲什么
 
-- [研究模式 SVG](agentic-rag-research-flow.svg)：默认模式，8 个学习阶段，合并展示相关性、充分性和专题分析。
+- [研究模式 SVG](agentic-rag-research-flow.svg)：默认模式，8 个学习阶段；先筛选后精读，随后检查充分性与专题分析，最后逐项核验风险。
 - [基础模式 SVG](agentic-rag-core-architecture.svg)：`RESEARCH_ENABLED=false` 的当前流程，不再是旧版本架构存档。
 
-它们是学习总览，不包含全部函数。精确分支由 `graph/build.py` 生成在代码参考中；修改图拓扑时必须人工复核两图。
+它们是学习总览，不包含全部函数。精确分支由 `graph/build.py` 生成在代码参考中；修改图拓扑时必须人工复核两图。图中“取证”包括新闻全分页、候选排序和正文预算，“核验”包括风险义务及适用的概率契约。
+
+最新实现重点：新闻全候选留档与加权排序、完整查询条件硬过滤、模型失败的有界自适应、逐步 token/计时、检查点边界恢复。它们不代表实现了自动概率计算或保证答案正确；实际缺口见状态页。
 
 ## 文档和代码如何保持同步
 
 `python scripts/docs_sync.py --check` 校验生成参考、相对链接、HTML 代码定位、SVG 结构，以及代码/文档是否有未确认变动。检查已纳入 pytest 和独立 CI 工作流，无需启动模型。
 
 参数与拓扑自动抽取，设计理由人工维护。自动检查不能证明所有中文解释永远正确，因此源码变动会要求重新审阅，而不是自动盖上“已最新”的标签。
+
+个人面试资料已退出公开文档体系，保留本地但不被 Git 追踪；页面与 CI 均不依赖其存在。

@@ -13,7 +13,7 @@ from ollama import Client
 
 from ..config import settings
 from ..ollama_connection import ollama_client_kwargs
-from .chains import reader, specialist, validate_reading, numbered_sentences, resolve_selection
+from .chains import specialist, validate_reading, read_segment
 from .memory import MemoryIndex
 from .scheduler import Scheduler, TaskSpec
 from .store import ResearchStore, fingerprint
@@ -24,9 +24,9 @@ from ..tools.contracts import ToolContext
 from ..tools.execution import execute_tool
 
 
-READING_VERSION = "reader-v2-sentence-selection-schema2"
-SPECIALIST_VERSION = "specialist-v4-tool-reread"
-WORKFLOW_VERSION = "research-workflow-v2-tools"
+READING_VERSION = "reader-v6-adaptive-model-feedback"
+SPECIALIST_VERSION = "specialist-v8-adaptive-model-feedback"
+WORKFLOW_VERSION = "research-workflow-v10-full-news-candidates"
 
 
 def store():
@@ -48,7 +48,8 @@ def model_revision():
     name = settings.llm_model
     for model in models:
         if model.model in {name, name + ":latest"}:
-            return fingerprint([name, model.digest, settings.temperature, settings.llm_context_window, settings.llm_max_output_tokens])
+            return fingerprint([name, model.digest, settings.temperature, settings.llm_context_window,
+                                settings.llm_max_output_tokens, settings.llm_reasoning])
     raise RuntimeError("无法确认本地模型版本，停止建立可能失效的阅读缓存")
 
 
@@ -72,7 +73,13 @@ def recall(state):
     database = store()
     index = MemoryIndex(database)
     docs, info = index.recall(state["question"], state["reading_recipe"], start=plan.get("start", ""),
-                              end=plan.get("end", ""), limit=settings.memory_recall_k)
+                              end=plan.get("end", ""),
+                              published_after=plan.get("published_after", ""),
+                              published_before=plan.get("published_before", ""),
+                              section=plan.get("section", ""),
+                              source_names=plan.get("source_names", []),
+                              limit=settings.memory_recall_k,
+                              subject_terms=state.get("subject_terms", []))
     writer()({"kind": "research", "event": "memory_recall", **info})
     return {"memory_documents": docs}
 
@@ -89,7 +96,9 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
             continue
         if document.metadata.get("reading_id") and document.metadata.get("memory_version"):
             # 补搜保留下来的证据可能已经是笔记，必须回到原文版本而不是把笔记当新闻重新阅读。
+            screening = {k: v for k, v in document.metadata.items() if k.startswith("relevance_")}
             document = database.document(document.metadata["memory_version"])
+            document.metadata.update(screening)
             document.metadata["memory_origin"] = True
         article = database.register(document, settings.reading_chunk_chars)
         for chunk in article["chunks"]:
@@ -109,9 +118,9 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
     def handle(payload):
         if read_fn:
             return validate_reading(read_fn(payload), payload["text"])
-        sentences, text = numbered_sentences(payload["text"])
-        result = reader().invoke({**payload, "text": text})
-        return resolve_selection(result, payload["text"], sentences)
+        ctx = task_context.get()
+        on_split = (lambda sizes: ctx["emit"]("reading_split", {"characters": sizes})) if ctx else None
+        return read_segment(payload, on_split=on_split)
 
     results = Scheduler(database, run_id, emit=emit).run(specs, {"reader": handle}) if specs else {}
     documents, reports = [], []
@@ -174,8 +183,13 @@ def dispatch_specialists(state, *, database=None, analyze_fn=None, index=None):
             ctx = task_context.get()
             emit_tool = (lambda event: ctx["emit"]("tool", event)) if ctx else writer()
             observation = execute_tool(read_news, {"evidence_ids": requests, "goal": payload["goal"]},
-                context=ToolContext(emit=emit_tool, read_version=database.document,
-                    evidence={f"E{i}": doc for i, doc in enumerate(state["answer_documents"], 1)}))
+                context=ToolContext(
+                    emit=emit_tool,
+                    caller=f"专题Agent/{str(ctx.get('task_id', 'unknown'))[:12]}" if ctx else "专题Agent",
+                    reason=f"回读原文以核对专题任务：{payload['goal']}",
+                    read_version=database.document,
+                    evidence={f"E{i}": doc for i, doc in enumerate(state["answer_documents"], 1)},
+                ))
             passages = observation.artifact.passages
             if ctx:
                 ctx["emit"]("reread", {"evidence_ids": requests[:2], "passages": len(passages)})

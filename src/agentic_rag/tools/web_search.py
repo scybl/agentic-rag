@@ -1,6 +1,7 @@
 """由 DuckDuckGo 提供支持的网络搜索数据源（无需 API 密钥）。"""
 
 import logging
+import re
 
 from ddgs import DDGS
 from langchain_core.documents import Document
@@ -10,6 +11,15 @@ from pydantic import Field
 from .contracts import EvidenceBundle, Query, ToolInput
 
 logger = logging.getLogger(__name__)
+
+
+def date_hint(item):
+    """搜索服务的日期和摘要日期仅作线索，不冒充核实过的网页发布时间。"""
+    value = item.get("date") or item.get("published_at")
+    if value:
+        return str(value)[:80]
+    match = re.match(r"\s*((?:[A-Z][a-z]{2,8}\s+\d{1,2},\s+20\d{2})|(?:20\d{2}[-年/]\d{1,2}[-月/]\d{1,2}日?))", item.get("body", ""))
+    return match.group(1) if match else ""
 
 
 class WebSearchInput(ToolInput):
@@ -35,6 +45,7 @@ def search_web(query: str, max_results: int = 4) -> tuple[str, EvidenceBundle]:
         Document(
             page_content=item.get("body", ""),
             metadata={"source": item.get("href", ""), "title": item.get("title", ""),
+                      "date_hint": date_hint(item),
                       "content_kind": "search_snippet", "source_type": "web_search"},
         )
         for item in results

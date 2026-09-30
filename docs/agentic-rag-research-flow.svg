@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1068" viewBox="0 0 1200 1068" role="img" aria-label="持久化多 Agent 研究流程">
 <title>持久化多 Agent 研究流程</title>
-<desc>新研究由 CLI 创建，路由规划后召回兼容记忆；三个检索工具并行初搜或定向补搜，阅读 Agent 保存引用和版本，研究阶段合并展示相关性、充分性与专题分析，专题可经 read_news 回读原文；生成与评审有界修正，最终交付回答或限制说明。恢复直接进入检查点，不强制从开头重跑。精确节点边表见 reference.md。</desc>
+<desc>CLI 创建研究编号；路由规划完整查询条件并召回兼容记忆；工具并行取证，新闻全分页留档排序后限量取正文；筛选器先筛材料，阅读 Agent 再保存分段成果；研究 Agent 核对充分性、专题回读及适用的概率证据契约；生成器综合证据；评审器逐项核验风险并执行适用的概率答案规则，有界补搜或重写；CLI 交付回答或限制，汇总 token 与耗时。模型输出校验与自适应重试在各模型链内部执行。恢复走兼容检查点，不凭 next 为空判完成。精确边表见 reference.md。</desc>
 <rect x="0" y="0" width="1200" height="1068" fill="#FFFFFF"/>
 <path d="M 600 120 L 600 165" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 176 L 595 164 L 605 164 Z" fill="#475569"/>
 <text x="620" y="152" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">问题与研究编号</text>
 <path d="M 600 248 L 600 293" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 304 L 595 292 L 605 292 Z" fill="#475569"/>
 <text x="620" y="280" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">查询条件与记忆召回</text>
 <path d="M 600 376 L 600 421" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 432 L 595 420 L 605 420 Z" fill="#475569"/>
-<text x="620" y="408" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">去重后的材料</text>
+<text x="620" y="408" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">候选留档与入选材料</text>
 <path d="M 600 504 L 600 549" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 560 L 595 548 L 605 548 Z" fill="#475569"/>
 <text x="620" y="536" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="400" fill="#475569" text-anchor="start">可追溯的阅读成果</text>
 <path d="M 600 632 L 600 677" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/><path d="M 600 688 L 595 676 L 605 676 Z" fill="#475569"/>
@@ -30,21 +30,21 @@
 <text x="600" y="208" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">路由器规划数据源</text>
 <text x="600" y="228" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">与查询条件</text>
 <rect x="492" y="304" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
-<text x="600" y="336" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">工具执行器受控取证</text>
-<text x="600" y="356" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">并行初搜 / 定向补搜</text>
+<text x="600" y="336" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">工具并行取证并排序</text>
+<text x="600" y="356" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">按预算获取新闻正文</text>
 <rect x="492" y="432" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
-<text x="600" y="464" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">阅读 Agent 处理分段</text>
-<text x="600" y="484" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">保存引用与正文版本</text>
+<text x="600" y="464" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">先筛选，再分段精读</text>
+<text x="600" y="484" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">保留理由与引用版本</text>
 <rect x="492" y="560" width="216" height="72" rx="8" fill="#F3E7E3" stroke="#9A3412" stroke-width="2"/>
 <text x="600" y="592" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">研究 Agent 核对缺口</text>
-<text x="600" y="612" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">专题分析 / 受限回读</text>
+<text x="600" y="612" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">专题 / 回读 / 概率规则</text>
 <rect x="492" y="688" width="216" height="72" rx="8" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
 <text x="600" y="720" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">生成器综合证据</text>
 <text x="600" y="740" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">给出条件判断</text>
 <rect x="492" y="816" width="216" height="72" rx="8" fill="#F3E7E3" stroke="#9A3412" stroke-width="2"/>
-<text x="600" y="848" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">评审器检查依据</text>
-<text x="600" y="868" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">与任务完成度</text>
+<text x="600" y="848" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">评审器逐项核验风险</text>
+<text x="600" y="868" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">概率题加验交付规则</text>
 <rect x="492" y="944" width="216" height="72" rx="24" fill="#E4EAFB" stroke="#1D4ED8" stroke-width="2"/>
-<text x="600" y="976" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">CLI 交付核验回答</text>
-<text x="600" y="996" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">未通过则说明限制</text>
+<text x="600" y="976" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">CLI 交付回答或限制</text>
+<text x="600" y="996" font-family="Helvetica, Arial, &apos;Liberation Sans&apos;, sans-serif" font-size="16" font-weight="700" fill="#172B4D" text-anchor="middle">汇总用量与耗时</text>
 </svg>

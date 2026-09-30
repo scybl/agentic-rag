@@ -24,6 +24,10 @@
 | LLM_REASONING | llm_reasoning | `_boolean('LLM_REASONING', False)` |
 | LLM_CONTEXT_WINDOW | llm_context_window | `int(os.getenv('LLM_CONTEXT_WINDOW', '8192'))` |
 | LLM_MAX_OUTPUT_TOKENS | llm_max_output_tokens | `int(os.getenv('LLM_MAX_OUTPUT_TOKENS', '2048'))` |
+| LLM_ADAPTIVE_MAX_ATTEMPTS | llm_adaptive_max_attempts | `int(os.getenv('LLM_ADAPTIVE_MAX_ATTEMPTS', '3'))` |
+| LLM_ADAPTIVE_MAX_OUTPUT_TOKENS | llm_adaptive_max_output_tokens | `int(os.getenv('LLM_ADAPTIVE_MAX_OUTPUT_TOKENS', str(max(llm_max_output_tokens, int(llm_max_output_tokens * 1.5)))))` |
+| LLM_ADAPTIVE_MAX_CONTEXT_WINDOW | llm_adaptive_max_context_window | `int(os.getenv('LLM_ADAPTIVE_MAX_CONTEXT_WINDOW', str(llm_context_window)))` |
+| LLM_ADAPTIVE_MAX_REQUEST_TIMEOUT / LLM_REQUEST_TIMEOUT | llm_adaptive_max_request_timeout | `int(os.getenv('LLM_ADAPTIVE_MAX_REQUEST_TIMEOUT', str(max(120, int(os.getenv('LLM_REQUEST_TIMEOUT', '120')) * 2))))` |
 | EMBEDDING_MODEL | embedding_model | `os.getenv('EMBEDDING_MODEL', 'BAAI/bge-small-zh-v1.5')` |
 | CHROMA_DIR | chroma_dir | `field(default_factory=lambda: _path('CHROMA_DIR', '.chroma'))` |
 | CHROMA_COLLECTION | collection_name | `os.getenv('CHROMA_COLLECTION', 'knowledge_base')` |
@@ -32,7 +36,6 @@
 | GENERATION_MAX_DOCUMENTS | generation_max_documents | `int(os.getenv('GENERATION_MAX_DOCUMENTS', '9'))` |
 | GENERATION_CONTEXT_CHARS | generation_context_chars | `int(os.getenv('GENERATION_CONTEXT_CHARS', '6000'))` |
 | NEWS_RETRIEVAL_K | news_retrieval_k | `int(os.getenv('NEWS_RETRIEVAL_K', '5'))` |
-| NEWS_CANDIDATE_K | news_candidate_k | `int(os.getenv('NEWS_CANDIDATE_K', '30'))` |
 | NEWS_VECTOR_CACHE_ENABLED | news_vector_cache_enabled | `_boolean('NEWS_VECTOR_CACHE_ENABLED', True)` |
 | MAX_RETRIES | max_retries | `int(os.getenv('MAX_RETRIES', '2'))` |
 | MAX_ANSWER_REVISIONS | max_answer_revisions | `int(os.getenv('MAX_ANSWER_REVISIONS', '2'))` |
@@ -96,6 +99,10 @@
 | LLM_REASONING | `false` |
 | LLM_CONTEXT_WINDOW | `8192` |
 | LLM_MAX_OUTPUT_TOKENS | `2048` |
+| LLM_ADAPTIVE_MAX_ATTEMPTS | `3` |
+| LLM_ADAPTIVE_MAX_OUTPUT_TOKENS | `3072` |
+| LLM_ADAPTIVE_MAX_CONTEXT_WINDOW | `8192` |
+| LLM_ADAPTIVE_MAX_REQUEST_TIMEOUT | `240` |
 | EVAL_MODEL | `qwen2.5:3b` |
 | EMBEDDING_MODEL | `BAAI/bge-small-zh-v1.5` |
 | CHROMA_DIR | `.chroma` |
@@ -105,7 +112,6 @@
 | GENERATION_MAX_DOCUMENTS | `9` |
 | GENERATION_CONTEXT_CHARS | `6000` |
 | NEWS_RETRIEVAL_K | `5` |
-| NEWS_CANDIDATE_K | `30` |
 | NEWS_VECTOR_CACHE_ENABLED | `true` |
 | MAX_RETRIES | `2` |
 | MAX_ANSWER_REVISIONS | `2` |
@@ -159,7 +165,8 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 | parser | '--inspect-reading' | metavar='READING_ID'; help='查看阅读成果、原文位置与版本' |
 | parser | '--repair-memory' | action='store_true'; help='仅重试向量投影，不重新阅读' |
 | parser | '--list-tools' | action='store_true'; help='查看实际注册的工具及参数，不调用模型或初始化数据库' |
-| parser | '-v' / '--verbose' | action='store_true'; help='Show additional exception details; queries and time choices are always shown' |
+| parser | '--idle-timeout' | type=float; default=DEFAULT_IDLE_TIMEOUT_SECONDS; metavar='SECONDS'; help='交互模式等待新输入的最长秒数；默认 300，设为 0 可禁用' |
+| parser | '-v' / '--verbose' | action='store_true'; help='显示完整规划、证据核验、逐调用统计与诊断；默认只显示核心数字、参数和异常' |
 
 ### `src/agentic_rag/ingestion.py`
 
@@ -187,6 +194,70 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 完整的运行时 Schema 请运行 `agentic-rag --list-tools`；程序注入的 RunnableConfig 不在公开参数中。
 声明中的校验器与共享类型同样属于契约，不能仅靠字段表判断所有规则。
 
+### `validate_model_output`
+
+检查模型输出类型和字段结构，返回可反馈给模型的具体错误原因。
+
+实现：[tools/guardrails.py](../src/agentic_rag/tools/guardrails.py)；装饰器：`tool('validate_model_output', args_schema=ModelOutputValidationInput, response_format='content_and_artifact')`
+
+| 字段 | 类型 | 默认/约束声明 |
+| --- | --- | --- |
+| output_type | `Literal['structured', 'text']` | `未指定` |
+| schema_name | `str` | `Field(min_length=1, max_length=200)` |
+| payload | `Any` | `None` |
+| parser_error | `str` | `Field(default='', max_length=2000)` |
+| raw_excerpt | `str` | `Field(default='', max_length=1000)` |
+
+### `plan_model_retry`
+
+根据可观测失败和硬预算选择下一次模型参数，或明确停止/切分。
+
+实现：[tools/guardrails.py](../src/agentic_rag/tools/guardrails.py)；装饰器：`tool('plan_model_retry', args_schema=ModelRetryInput, response_format='content_and_artifact')`
+
+| 字段 | 类型 | 默认/约束声明 |
+| --- | --- | --- |
+| stage | `str` | `Field(min_length=1, max_length=200)` |
+| failure_kind | `Literal['schema', 'empty', 'truncated', 'timeout', 'connection', 'server_busy', 'server_error', 'client_error', 'unknown']` | `未指定` |
+| attempt | `int` | `Field(ge=1, le=20)` |
+| max_attempts | `int` | `Field(ge=1, le=20)` |
+| input_tokens | `int` | `Field(default=0, ge=0)` |
+| output_tokens | `int` | `Field(default=0, ge=0)` |
+| current_num_predict | `int` | `Field(ge=1)` |
+| current_num_ctx | `int` | `Field(ge=1)` |
+| current_timeout_seconds | `int` | `Field(ge=1)` |
+| reasoning | `bool` | `False` |
+| output_cap | `int` | `Field(ge=1)` |
+| context_cap | `int` | `Field(ge=1)` |
+| timeout_cap | `int` | `Field(ge=1)` |
+| expected_output_tokens | `int` | `Field(default=0, ge=0)` |
+| supports_split | `bool` | `False` |
+| violations | `list[str]` | `Field(default_factory=list, max_length=10)` |
+
+### `validate_probability_evidence`
+
+检查概率估计是否取得带数值、方法和可追溯正文的直接证据。
+
+实现：[tools/guardrails.py](../src/agentic_rag/tools/guardrails.py)；装饰器：`tool('validate_probability_evidence', args_schema=ProbabilityEvidenceInput, response_format='content_and_artifact')`
+
+| 字段 | 类型 | 默认/约束声明 |
+| --- | --- | --- |
+| estimate_kind | `Literal['none', 'directional', 'level', 'probability']` | `'none'` |
+| question | `str` | `Field(min_length=1, max_length=2000)` |
+| evidence | `list[EvidenceDescriptor]` | `Field(default_factory=list, max_length=30)` |
+
+### `validate_probability_answer`
+
+交付前强制检查概率答案的数值、事件、时点、方法、证据与引用。
+
+实现：[tools/guardrails.py](../src/agentic_rag/tools/guardrails.py)；装饰器：`tool('validate_probability_answer', args_schema=ProbabilityAnswerInput, response_format='content_and_artifact')`
+
+| 字段 | 类型 | 默认/约束声明 |
+| --- | --- | --- |
+| estimate_kind | `Literal['none', 'directional', 'level', 'probability']` | `'none'` |
+| question | `str` | `Field(min_length=1, max_length=2000)` |
+| answer | `str` | `Field(min_length=1, max_length=30000)` |
+| evidence_contract_passed | `bool` | `False` |
+
 ### `search_knowledge`
 
 检索本地 knowledge 中的稳定知识和分析方法，返回原始文档片段及来源。
@@ -201,9 +272,10 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 
 ### `search_news`
 
-按短关键词和指定日期检索私有新闻，候选向量排序后读取入选正文。
+执行模型生成的完整新闻查询：主题/人物/机构、时间、栏目、来源、排序和数量。
 
-每页最多20条，候选和入选总量受配置约束；不会自动添加时间限制。
+API 取完所有摘要页再按精确时间与来源硬过滤；不会自动添加限制或按返回顺序截断。
+全部匹配候选及权重保留在 artifact 和研究事件，正文预算外的候选不是无关新闻。
 保留部分失败和摘要降级信息，不把 API 错误等同于没有相关新闻。
 
 实现：[tools/news.py](../src/agentic_rag/tools/news.py)；装饰器：`tool('search_news', args_schema=NewsSearchInput, response_format='content_and_artifact')`
@@ -212,9 +284,18 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 | --- | --- | --- |
 | semantic_query | `Query` | `Field(description='原始研究问题，用于候选新闻的语义排序')` |
 | queries | `list[Keyword]` | `Field(min_length=1, max_length=4, description='1至4组分别查询的短主题词；只传一个空字符串表示不限关键词')` |
+| people | `list[Keyword]` | `Field(default_factory=list, max_length=4, description='查询计划识别的人物约束')` |
+| organizations | `list[Keyword]` | `Field(default_factory=list, max_length=4, description='查询计划识别的机构或公司约束')` |
+| topics | `list[Keyword]` | `Field(default_factory=list, max_length=6, description='查询计划识别的主题约束')` |
+| source_names | `list[Keyword]` | `Field(default_factory=list, max_length=4, description='用户明确指定的信息源；为空则不限制')` |
 | start | `str` | `Field(default='', description='已确认的新闻起始日 YYYY-MM-DD；空字符串表示不限制')` |
 | end | `str` | `Field(default='', description='已确认的新闻结束日 YYYY-MM-DD；空字符串表示不限制')` |
+| published_after | `str` | `Field(default='', description='精确发布时间下界 ISO 8601，必须带时区')` |
+| published_before | `str` | `Field(default='', description='精确发布时间上界 ISO 8601，必须带时区')` |
 | section | `str` | `Field(default='', max_length=100, description='用户指定栏目；空字符串表示不限')` |
+| sort_by | `Literal['relevance', 'newest', 'oldest']` | `Field(default='relevance', description='结果排序')` |
+| coverage | `Literal['focused', 'broad', 'exhaustive']` | `Field(default='focused', description='正文覆盖目标；所有模式均取完匹配候选')` |
+| result_limit | `int` | `Field(default=5, ge=1, le=15, description='本轮读取正文预算，不限制匹配候选数量')` |
 
 ### `read_news`
 
@@ -248,10 +329,11 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 
 | 来源 | 常量 | 值 |
 | --- | --- | --- |
-| src/agentic_rag/research/service.py | READING_VERSION | `'reader-v2-sentence-selection-schema2'` |
-| src/agentic_rag/research/service.py | SPECIALIST_VERSION | `'specialist-v4-tool-reread'` |
-| src/agentic_rag/research/service.py | WORKFLOW_VERSION | `'research-workflow-v2-tools'` |
-| src/agentic_rag/graph/nodes.py | ANALYSIS_PROMPT_VERSION | `'research-v2-reading-specialists-reread'` |
+| src/agentic_rag/research/service.py | READING_VERSION | `'reader-v6-adaptive-model-feedback'` |
+| src/agentic_rag/research/service.py | SPECIALIST_VERSION | `'specialist-v8-adaptive-model-feedback'` |
+| src/agentic_rag/research/service.py | WORKFLOW_VERSION | `'research-workflow-v10-full-news-candidates'` |
+| src/agentic_rag/graph/nodes.py | ANALYSIS_PROMPT_VERSION | `'research-v7-adaptive-model-feedback'` |
+| src/agentic_rag/graph/nodes.py | GRADE_VERSION | `'grade-v4-scoped-structured'` |
 | src/agentic_rag/ingestion.py | CHUNK_SIZE | `800` |
 | src/agentic_rag/ingestion.py | CHUNK_OVERLAP | `120` |
 | src/agentic_rag/ingestion.py | MANIFEST_VERSION | `1` |
@@ -266,14 +348,14 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 | initialize_research | 直接 | route |
 | route | 直接 | recall_memory |
 | recall_memory | 直接 | collect_sources |
-| collect_sources | 直接 | read_documents |
-| read_documents | 直接 | grade_documents |
+| collect_sources | 直接 | grade_documents |
+| grade_documents | 直接 | read_documents |
+| read_documents | 直接 | assess_evidence |
 | dispatch_specialists | generate | generate |
 | dispatch_specialists | supplement | supplement_sources |
-| grade_documents | 直接 | assess_evidence |
 | assess_evidence | generate | dispatch_specialists |
 | assess_evidence | supplement | supplement_sources |
-| supplement_sources | 直接 | read_documents |
+| supplement_sources | 直接 | grade_documents |
 | generate | 直接 | evaluate_generation |
 | revise_answer | 直接 | evaluate_generation |
 | evaluate_generation | finish | END |

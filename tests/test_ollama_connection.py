@@ -16,7 +16,7 @@ from agentic_rag.ollama_connection import ollama_client_kwargs
 
 
 @contextmanager
-def local_server(*, reject=False):
+def local_server(*, reject=False, usage=False):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
@@ -41,6 +41,8 @@ def local_server(*, reject=False):
                 "response": "",
                 "done": True,
             }
+            if usage:
+                data.update(prompt_eval_count=23, eval_count=5, prompt_eval_cached_count=11)
             content = (json.dumps(data, ensure_ascii=False) + "\n").encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson")
@@ -113,3 +115,28 @@ def test_proxy_503_cannot_break_warmup_or_sync_async_inference(monkeypatch):
             if model is not None:
                 model._client._client.close()
             chains.get_llm.cache_clear()
+
+
+def test_real_ollama_adapter_retains_final_stream_usage():
+    from langchain_ollama import ChatOllama
+    from langchain_core.output_parsers import StrOutputParser
+    from agentic_rag.token_usage import UsageLedger, usage_session
+
+    with local_server(usage=True) as (server, base_url):
+        model = ChatOllama(model="test", base_url=base_url, reasoning=False,
+                           client_kwargs={"trust_env": False})
+        ledger = UsageLedger()
+        try:
+            with usage_session(ledger):
+                answer = chains._with_model_retry(model | StrOutputParser()).invoke("测试")
+            assert answer == "本机直连成功"
+            assert server.requests == ["/api/chat"]
+            stats = ledger.report()["current"]
+            assert stats["input_tokens"] == 23 and stats["output_tokens"] == 5
+            assert stats["total_tokens"] == 28 and stats["calls"] == 1
+            # 老版 SDK 丢弃新增字段；新版若透传就必须使用精确值，不能猜成 0。
+            assert stats["cached_input_tokens"] in (None, 11)
+            assert stats["cached_unknown"] == (1 if stats["cached_input_tokens"] is None else 0)
+            assert stats["reasoning_unknown"] == 1
+        finally:
+            model._client._client.close()

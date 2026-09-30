@@ -46,6 +46,16 @@ class Settings:
     llm_reasoning: bool = _boolean("LLM_REASONING", False)
     llm_context_window: int = int(os.getenv("LLM_CONTEXT_WINDOW", "8192"))
     llm_max_output_tokens: int = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "2048"))
+    llm_adaptive_max_attempts: int = int(os.getenv("LLM_ADAPTIVE_MAX_ATTEMPTS", "3"))
+    llm_adaptive_max_output_tokens: int = int(os.getenv(
+        "LLM_ADAPTIVE_MAX_OUTPUT_TOKENS", str(max(llm_max_output_tokens, int(llm_max_output_tokens * 1.5)))
+    ))
+    llm_adaptive_max_context_window: int = int(os.getenv(
+        "LLM_ADAPTIVE_MAX_CONTEXT_WINDOW", str(llm_context_window)
+    ))
+    llm_adaptive_max_request_timeout: int = int(os.getenv(
+        "LLM_ADAPTIVE_MAX_REQUEST_TIMEOUT", str(max(120, int(os.getenv("LLM_REQUEST_TIMEOUT", "120")) * 2))
+    ))
     embedding_model: str = os.getenv(
         "EMBEDDING_MODEL",
         "BAAI/bge-small-zh-v1.5",
@@ -64,7 +74,6 @@ class Settings:
     generation_max_documents: int = int(os.getenv("GENERATION_MAX_DOCUMENTS", "9"))
     generation_context_chars: int = int(os.getenv("GENERATION_CONTEXT_CHARS", "6000"))
     news_retrieval_k: int = int(os.getenv("NEWS_RETRIEVAL_K", "5"))
-    news_candidate_k: int = int(os.getenv("NEWS_CANDIDATE_K", "30"))
     news_vector_cache_enabled: bool = _boolean("NEWS_VECTOR_CACHE_ENABLED", True)
     max_retries: int = int(os.getenv("MAX_RETRIES", "2"))
     max_answer_revisions: int = int(os.getenv("MAX_ANSWER_REVISIONS", "2"))

@@ -16,7 +16,6 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = "docs/reference.md"
 LOCK = "docs/.review-state.json"
-INTERVIEW = "docs/Agent求职面试题与参考答案.html"
 
 
 def read(root, path):
@@ -168,8 +167,7 @@ def render_reference(root):
 class Page(HTMLParser):
     def __init__(self, text):
         super().__init__(convert_charrefs=True)
-        self.links, self.refs, self.ids, self.questions, self.originals = [], [], [], [], []
-        self.capture = None
+        self.links, self.refs, self.ids = [], [], []
         self.feed(text)
 
     def handle_starttag(self, tag, attrs):
@@ -180,19 +178,6 @@ class Page(HTMLParser):
             self.links.append(attrs.get("href", attrs.get("src", "")))
         if "data-source-path" in attrs:
             self.refs.append(attrs)
-        if tag == "article" and "question" in attrs.get("class", "").split():
-            self.questions.append(attrs.get("id"))
-        if "data-original" in attrs:
-            self.capture = [tag, attrs["data-original"], ""]
-
-    def handle_data(self, data):
-        if self.capture:
-            self.capture[2] += data
-
-    def handle_endtag(self, tag):
-        if self.capture and tag == self.capture[0]:
-            self.originals.append(self.capture[1:])
-            self.capture = None
 
 
 def source_line(root, attrs):
@@ -221,13 +206,19 @@ def refresh_locations(root, text):
                   replace, text)
 
 
+def private_document(path):
+    """与 .gitignore 的面试资料规则对应；父目录命中也不参与公开文档维护。"""
+    return any("面试" in part or "interview" in part.casefold() for part in Path(path).parts)
+
+
 def document_paths(root):
     return sorted({root / "README.md", *(p for p in (root / "docs").rglob("*")
-                  if p.suffix.lower() in {".md", ".html", ".svg"})})
+                  if p.suffix.lower() in {".md", ".html", ".svg"}
+                  and not private_document(p.relative_to(root)))})
 
 
 def inventories(root):
-    sources = {root / ".env.example", root / "pyproject.toml", root / "evaluation/dataset.json"}
+    sources = {root / ".env.example", root / ".gitignore", root / "pyproject.toml", root / "evaluation/dataset.json"}
     for folder in ("src", "tests", "scripts", "evaluation"):
         sources.update((root / folder).rglob("*.py"))
     for pattern in ("*.yml", "*.yaml"):
@@ -284,20 +275,14 @@ def validate_links(root):
             if parsed.scheme or parsed.netloc:
                 continue
             dest = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path
-            if not dest.is_file() or not dest.is_relative_to(root.resolve()):
+            if dest.is_relative_to(root.resolve()) and private_document(dest.relative_to(root.resolve())):
+                errors.append(f"公开文档不能依赖本地面试资料：{path.name} → {link}")
+            elif not dest.is_file() or not dest.is_relative_to(root.resolve()):
                 errors.append(f"本地链接不存在或越界：{path.name} → {link}")
             elif parsed.fragment and dest.suffix == ".html":
                 if unquote(parsed.fragment) not in page_for(dest).ids:
                     errors.append(f"HTML 锚点不存在：{path.name} → {link}")
-    page = page_for(root / INTERVIEW)
-    if len(page.questions) != 45 or len(set(page.questions)) != 45 or len(page.originals) != 161:
-        errors.append("面试原题/原答案数量改变，应核对原件，不得悄悄删题")
     return errors
-
-
-def original_digest(root):
-    page = Page(read(root, INTERVIEW))
-    return hashlib.sha256(json.dumps(page.originals, ensure_ascii=False).encode()).hexdigest()
 
 
 def check(root=ROOT, *, review=True):
@@ -314,8 +299,6 @@ def check(root=ROOT, *, review=True):
                 for path in sorted(set(old) | set(actual)):
                     if old.get(path) != actual.get(path):
                         errors.append(f"未审阅变动 [{group}]：{path}")
-            if saved.get("original_answers_sha256") != original_digest(root):
-                errors.append("面试原始答案内容改变，请对照原件恢复")
     return errors
 
 
@@ -330,19 +313,17 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.refresh:
         (ROOT / REFERENCE).write_text(render_reference(ROOT), encoding="utf-8", newline="\n")
-        text = read(ROOT, INTERVIEW)
-        (ROOT / INTERVIEW).write_text(refresh_locations(ROOT, text), encoding="utf-8", newline="\n")
+        for path in document_paths(ROOT):
+            if path.suffix.lower() == ".html":
+                path.write_text(refresh_locations(ROOT, read(ROOT, path)), encoding="utf-8", newline="\n")
         print("已刷新代码事实与定位；中文解释和流程图仍需人工核对，审阅记录未更新。")
         return 0
     errors = check(ROOT, review=not args.acknowledge_review)
-    if args.acknowledge_review and (ROOT / LOCK).exists():
-        if json.loads(read(ROOT, LOCK)).get("original_answers_sha256") != original_digest(ROOT):
-            errors.append("不能确认：面试原始答案改变，请先对照原件恢复")
     if errors:
         print("\n".join(errors))
         return 1
     if args.acknowledge_review:
-        state = {"format": 1, "original_answers_sha256": original_digest(ROOT), **inventories(ROOT)}
+        state = {"format": 2, **inventories(ROOT)}
         (ROOT / LOCK).write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         print("已记录人工审阅确认。此记录不是测试或语义正确性证明。")
     else:

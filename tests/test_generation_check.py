@@ -166,6 +166,34 @@ class GenerationCheckTests(unittest.TestCase):
             })
         self.assertTrue(result["generation_grounded"])
 
+    def test_probability_contract_overrides_erroneous_model_acceptance(self):
+        with patch.object(nodes, "get_answer_reviewer") as reviewer:
+            reviewer.return_value.invoke.return_value = assessment()
+            result = nodes.evaluate_generation({
+                **self.state,
+                "question": "预测2027年第二季度，美国降息概率",
+                "original_question": "预测2027年第二季度，美国降息概率",
+                "task_type": "forecast", "estimate_kind": "probability",
+                "evidence_assessment": {"probability_contract": {"passed": True}},
+                "generation": "2027年第二季度可能降息 [E1]。",
+            })
+        self.assertFalse(result["generation_complete"])
+        self.assertEqual(result["next_action"], "revise")
+        self.assertIn("概率", result["generation_check"])
+
+    def test_complete_probability_answer_passes_deterministic_contract(self):
+        with patch.object(nodes, "get_answer_reviewer") as reviewer:
+            reviewer.return_value.invoke.return_value = assessment()
+            result = nodes.evaluate_generation({
+                **self.state,
+                "question": "预测2027年第二季度，美国降息概率",
+                "original_question": "预测2027年第二季度，美国降息概率",
+                "task_type": "forecast", "estimate_kind": "probability",
+                "evidence_assessment": {"probability_contract": {"passed": True}},
+                "generation": "截至2026-09-30，事件为2027年第二季度降息。基于FedWatch隐含概率，估计为45% [E1]。",
+            })
+        self.assertTrue(result["generation_complete"])
+
     def test_cache_version_changes_with_actual_evidence_order(self):
         self.assertNotEqual(nodes._cache_version("[E1] 产能 [E2] 需求"),
                             nodes._cache_version("[E1] 需求 [E2] 产能"))

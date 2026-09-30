@@ -27,3 +27,7 @@ Thumbs.db
 
 # Test / cache
 .pytest_cache/
+
+# Local interview preparation (keep files locally, never publish)
+*面试*
+*[Ii][Nn][Tt][Ee][Rr][Vv][Ii][Ee][Ww]*

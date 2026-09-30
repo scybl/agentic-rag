@@ -99,6 +99,9 @@ def test_real_chroma_projection_hybrid_recall_and_current_version_filter(tmp_pat
     service.read_documents(state, database=db, read_fn=reading, index=index)
     docs, info = index.recall("生猪价格", "recipe", start="2026-09-01", end="2026-09-29")
     assert len(docs) == 1 and info["semantic"]
+    assert index.recall("生猪", "recipe", published_after="2026-09-29T09:00:01+08:00")[0] == []
+    assert len(index.recall("生猪", "recipe", source_names=["example.com"])[0]) == 1
+    assert index.recall("生猪", "recipe", source_names=["Reuters"])[0] == []
     assert index.recall("生猪", "recipe", start="2027-01-01")[0] == []
     db.register(document("生猪新闻已经更正。"), 2200)
     assert index.recall("生猪", "recipe")[0] == []

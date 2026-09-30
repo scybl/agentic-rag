@@ -1,13 +1,12 @@
 """可重建的 Chroma 投影：原文、阅读笔记、专题成果及混合召回。"""
 
 import json
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from langchain_core.documents import Document
 
 from ..config import settings
 from ..news_index import get_embedding_model
+from ..news_plan import news_metadata_matches
 from .store import fingerprint
 
 
@@ -49,7 +48,8 @@ class MemoryIndex:
                 failed += len(items)
         return {"synced": synced, "failed": failed, "remaining": len(self.store.pending_vectors(self.embedding_name, 10000))}
 
-    def recall(self, query, recipe, *, start="", end="", limit=3):
+    def recall(self, query, recipe, *, start="", end="", published_after="",
+               published_before="", section="", source_names=(), limit=3, subject_terms=()):
         lexical = self.store.lexical_readings(query, recipe)
         semantic_ids = []
         semantic = False
@@ -66,14 +66,18 @@ class MemoryIndex:
         # 先用索引召回至多100篇候选，再读取正文，不扫描整个新闻库。
         ids = list(dict.fromkeys(lexical + semantic_ids))
         candidates = []
+        filtered = 0
+        terms = [term.strip().casefold() for term in subject_terms if term.strip()]
         for row in self.store.current_readings(recipe, ids):
-            published = row["metadata"].get("published_at", "")
-            try:
-                date = datetime.fromisoformat(published.replace("Z", "+00:00"))
-                day = (date.astimezone(ZoneInfo("Asia/Shanghai")) if date.tzinfo else date).date().isoformat()
-            except (ValueError, TypeError):
-                day = ""
-            if (start or end) and (not day or (start and day < start) or (end and day > end)):
+            material = (str(row["metadata"].get("title", "")) + "\n" + row["body"]).casefold()
+            if terms and not any(term in material for term in terms):
+                filtered += 1
+                continue
+            if not news_metadata_matches(row["metadata"], {
+                "start": start, "end": end,
+                "published_after": published_after, "published_before": published_before,
+                "section": section, "source_names": list(source_names),
+            }):
                 continue
             # 新闻记忆不能越权替代知识库，未知/摘要材料也不伪装成全文。
             if row["metadata"].get("source_type") == "news_api":
@@ -88,4 +92,5 @@ class MemoryIndex:
         selected = sorted(scores, key=lambda key: (-scores[key], key))[:limit]
         documents = [Document(page_content=by_id[key]["body"], metadata={**by_id[key]["metadata"],
                      "memory_origin": True, "memory_version": by_id[key]["version_id"]}) for key in selected]
-        return documents, {"semantic": semantic, "lexical": len(lexical), "count": len(documents), "error": error}
+        return documents, {"semantic": semantic, "lexical": len(lexical), "count": len(documents),
+                           "subject_filtered": filtered, "subject_terms": list(subject_terms), "error": error}

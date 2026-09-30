@@ -1,13 +1,22 @@
 """终端逐步骤追踪的离线测试。"""
 
 import io
+import threading
 import unittest
 from contextlib import redirect_stdout
 
 from langchain_core.documents import Document
 from ollama import ResponseError
 
-from agentic_rag.cli import TracePrinter, ask, run_with_trace, warm_up_model
+from agentic_rag.cli import (
+    ConsoleInputTimeout,
+    TracePrinter,
+    ask,
+    input_with_timeout,
+    run_with_trace,
+    unload_model,
+    warm_up_model,
+)
 
 
 class FakeGraph:
@@ -90,7 +99,7 @@ class CLITraceTests(unittest.TestCase):
         output = io.StringIO()
         graph = FakeGraph()
         with redirect_stdout(output):
-            result = run_with_trace(graph, "问题")
+            result = run_with_trace(graph, "问题", verbose=True)
 
         text = output.getvalue()
         self.assertIn("流程 1 · 规划数据源", text)
@@ -106,10 +115,10 @@ class CLITraceTests(unittest.TestCase):
         self.assertIn("本页上限：20 条", text)
         self.assertIn("第 1 页返回：0 条", text)
 
-    def test_default_trace_does_not_truncate_plan_or_hide_errors(self):
+    def test_verbose_trace_does_not_truncate_plan_or_hide_errors(self):
         summary = "需要核对新闻中的供需因素。" * 20
         output = io.StringIO()
-        trace = TracePrinter()
+        trace = TracePrinter(verbose=True)
         with redirect_stdout(output):
             trace.show("route", {"selected_sources": ["news_api"], "plan_summary": summary}, {})
             trace.show_event({"kind": "news_error", "message": "HTTP 503", "partial_count": 20})
@@ -120,7 +129,7 @@ class CLITraceTests(unittest.TestCase):
     def test_suggested_search_is_not_displayed_as_executed(self):
         output = io.StringIO()
         with redirect_stdout(output):
-            TracePrinter().show("assess_evidence", {
+            TracePrinter(verbose=True).show("assess_evidence", {
                 "evidence_assessment": {"ready": True, "summary": "可以条件预测", "missing_factors": ["成本"]},
                 "pending_news_queries": ["饲料"], "next_action": "generate",
             }, {})
@@ -156,6 +165,32 @@ class CLITraceTests(unittest.TestCase):
         self.assertFalse(client.calls[-1]["think"])
         self.assertEqual(client.calls[-1]["keep_alive"], "30m")
         self.assertIn("模型已就绪", output.getvalue())
+
+    def test_console_input_times_out_without_blocking_process_exit(self):
+        release = threading.Event()
+
+        def blocked_input(_prompt):
+            release.wait(1)
+            return "迟到的输入"
+
+        try:
+            with self.assertRaises(ConsoleInputTimeout):
+                input_with_timeout("> ", 0.01, input_fn=blocked_input)
+        finally:
+            release.set()
+
+    def test_unload_model_requests_immediate_release(self):
+        output = io.StringIO()
+        client = FakeWarmupClient()
+        with redirect_stdout(output):
+            succeeded = unload_model(client=client)
+        self.assertTrue(succeeded)
+        self.assertEqual(len(client.calls), 1)
+        self.assertTrue(client.calls[0]["model"])
+        self.assertEqual(client.calls[0]["prompt"], "")
+        self.assertFalse(client.calls[0]["stream"])
+        self.assertEqual(client.calls[0]["keep_alive"], 0)
+        self.assertIn("已释放本地模型", output.getvalue())
 
 
 if __name__ == "__main__":

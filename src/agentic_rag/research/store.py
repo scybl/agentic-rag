@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS chunk_version ON chunks(version_id);
 CREATE TABLE IF NOT EXISTS tasks(
  key TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL,
  result TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, owner TEXT,
- lease_until REAL NOT NULL DEFAULT 0, updated REAL NOT NULL);
+ lease_until REAL NOT NULL DEFAULT 0, updated REAL NOT NULL, retryable INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS run_tasks(
  run_id TEXT NOT NULL, task_key TEXT NOT NULL, dependencies TEXT NOT NULL,
  PRIMARY KEY(run_id, task_key));
@@ -92,6 +92,10 @@ class ResearchStore:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
+            # 加法迁移保留所有旧任务；串行检查，避免并发启动重复加列。
+            db.execute("BEGIN IMMEDIATE")
+            if "retryable" not in {row["name"] for row in db.execute("PRAGMA table_info(tasks)")}:
+                db.execute("ALTER TABLE tasks ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1")
             # 兼容已有阅读记录；只为缺失条目补关键词索引，不调用模型。
             rows = db.execute("SELECT r.id,r.result,v.metadata FROM readings r JOIN versions v ON v.id=r.version_id WHERE r.status='complete' AND NOT EXISTS (SELECT 1 FROM reading_keyword_index f WHERE f.id=r.id)").fetchall()
             for row in rows:
@@ -137,6 +141,11 @@ class ResearchStore:
         with self.connect() as db:
             return [dict(r) for r in db.execute("SELECT * FROM runs ORDER BY updated DESC LIMIT ?", (limit,))]
 
+    def run_info(self, run_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            return dict(row) if row else None
+
     def event(self, run_id, data):
         with self.connect() as db:
             db.execute("INSERT INTO events(run_id,at,data) VALUES(?,?,?)", (run_id, time.time(), encoded(data)))
@@ -144,6 +153,13 @@ class ResearchStore:
     def events(self, run_id, limit=100):
         with self.connect() as db:
             return [json.loads(r[0]) for r in db.execute("SELECT data FROM events WHERE run_id=? ORDER BY id DESC LIMIT ?", (run_id, limit))][::-1]
+
+    def token_events(self, run_id):
+        """账本必须读取整次研究，不能沿用最近 100 条的展示窗口。"""
+        with self.connect() as db:
+            return [json.loads(r[0]) for r in db.execute(
+                "SELECT data FROM events WHERE run_id=? AND json_extract(data,'$.kind')='token_usage' ORDER BY id",
+                (run_id,))]
 
     def register(self, document: Document, chunk_chars):
         meta = dict(document.metadata)
@@ -273,7 +289,7 @@ class ResearchStore:
     def claim(self, key, owner, lease, attempts):
         with self.connect(immediate=True) as db:
             row = db.execute("SELECT * FROM tasks WHERE key=?", (key,)).fetchone()
-            if row is None or row["status"] == "complete":
+            if row is None or row["status"] == "complete" or not row["retryable"]:
                 return False
             if row["status"] == "running" and row["lease_until"] > time.time():
                 return False
@@ -299,8 +315,8 @@ class ResearchStore:
 
     def fail(self, key, owner, error):
         with self.connect() as db:
-            db.execute("UPDATE tasks SET status='failed',error=?,lease_until=0,updated=? WHERE key=? AND owner=? AND status='running'",
-                       (str(error)[:1500], time.time(), key, owner))
+            db.execute("UPDATE tasks SET status='failed',error=?,retryable=?,lease_until=0,updated=? WHERE key=? AND owner=? AND status='running'",
+                       (str(error)[:1500], int(getattr(error, "retryable", True)), time.time(), key, owner))
 
     def abandon(self, owner):
         with self.connect() as db:
@@ -308,7 +324,7 @@ class ResearchStore:
 
     def retry_failed(self, run_id):
         with self.connect() as db:
-            return db.execute("UPDATE tasks SET status='pending',attempts=0,error=NULL WHERE status='failed' AND key IN (SELECT task_key FROM run_tasks WHERE run_id=?)", (run_id,)).rowcount
+            return db.execute("UPDATE tasks SET status='pending',attempts=0,error=NULL,retryable=1 WHERE status='failed' AND key IN (SELECT task_key FROM run_tasks WHERE run_id=?)", (run_id,)).rowcount
 
     def cache_get(self, key):
         with self.connect() as db:

@@ -76,7 +76,9 @@ def format_evidence(documents: list[Document], query: str, budget: int) -> str:
         metadata = document.metadata
         title = str(metadata.get("title") or metadata.get("source") or "未知来源")[:100]
         kind = metadata.get("content_kind") or metadata.get("source_type", "unknown")
-        headers.append(f"[E{index}] {title} | {metadata.get('published_at') or '日期未标注'} | {kind}\n")
+        date = metadata.get("published_at") or (f"搜索日期线索（未核实）：{metadata['date_hint']}" if metadata.get("date_hint") else "日期未标注")
+        screening = " | 相关性待确认" if metadata.get("relevance_decision") == "uncertain" else ""
+        headers.append(f"[E{index}] {title} | {date} | {kind}{screening}\n")
     available = max(0, budget - sum(map(len, headers)) - 2 * (len(documents) - 1))
     per_document = available // len(documents)
     return "\n\n".join(
