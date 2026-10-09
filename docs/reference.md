@@ -42,18 +42,25 @@
 | RESEARCH_ENABLED | research_enabled | `_boolean('RESEARCH_ENABLED', True)` |
 | RESEARCH_DB | research_db | `field(default_factory=lambda: _path('RESEARCH_DB', '.chroma/research.sqlite3'))` |
 | CHECKPOINT_DB | checkpoint_db | `field(default_factory=lambda: _path('CHECKPOINT_DB', '.chroma/checkpoints.sqlite3'))` |
+| CONVERSATION_DB | conversation_db | `field(default_factory=lambda: _path('CONVERSATION_DB', '.chroma/conversations.sqlite3'))` |
+| CONVERSATION_CONTEXT_BYTES | conversation_context_bytes | `int(os.getenv('CONVERSATION_CONTEXT_BYTES', '12000'))` |
+| CONVERSATION_RECENT_TURNS | conversation_recent_turns | `int(os.getenv('CONVERSATION_RECENT_TURNS', '3'))` |
 | MEMORY_VECTOR_DIR | memory_vector_dir | `field(default_factory=lambda: _path('MEMORY_VECTOR_DIR', '.chroma/memory'))` |
 | AGENT_WORKERS | agent_workers | `int(os.getenv('AGENT_WORKERS', '4'))` |
 | LLM_CONCURRENCY | llm_concurrency | `int(os.getenv('LLM_CONCURRENCY', '2'))` |
 | IO_CONCURRENCY | io_concurrency | `int(os.getenv('IO_CONCURRENCY', '4'))` |
 | RESEARCH_MAX_TASKS | research_max_tasks | `int(os.getenv('RESEARCH_MAX_TASKS', '20'))` |
+| RESEARCH_HARD_MAX_TASKS | research_hard_max_tasks | `int(os.getenv('RESEARCH_HARD_MAX_TASKS', '200'))` |
 | RESEARCH_MAX_ROUNDS | research_max_rounds | `int(os.getenv('RESEARCH_MAX_ROUNDS', '3'))` |
 | TASK_MAX_ATTEMPTS | task_max_attempts | `int(os.getenv('TASK_MAX_ATTEMPTS', '2'))` |
 | TASK_LEASE_SECONDS | task_lease_seconds | `int(os.getenv('TASK_LEASE_SECONDS', '180'))` |
 | TASK_WAIT_SECONDS | task_wait_seconds | `int(os.getenv('TASK_WAIT_SECONDS', '240'))` |
 | LLM_REQUEST_TIMEOUT | llm_request_timeout | `int(os.getenv('LLM_REQUEST_TIMEOUT', '120'))` |
 | RESEARCH_TIMEOUT | research_timeout | `int(os.getenv('RESEARCH_TIMEOUT', '900'))` |
+| RESEARCH_TOTAL_TIMEOUT | research_total_timeout | `int(os.getenv('RESEARCH_TOTAL_TIMEOUT', '1800'))` |
+| RESEARCH_MAX_MODEL_CALLS | research_max_model_calls | `int(os.getenv('RESEARCH_MAX_MODEL_CALLS', '160'))` |
 | READING_CHUNK_CHARS | reading_chunk_chars | `int(os.getenv('READING_CHUNK_CHARS', '2200'))` |
+| READING_VERBATIM_MAX_CHARS | reading_verbatim_max_chars | `int(os.getenv('READING_VERBATIM_MAX_CHARS', '1200'))` |
 | MEMORY_RECALL_K | memory_recall_k | `int(os.getenv('MEMORY_RECALL_K', '3'))` |
 | SPECIALIST_COUNT | specialist_count | `int(os.getenv('SPECIALIST_COUNT', '3'))` |
 | KNOWLEDGE_WATCH_ENABLED | knowledge_watch_enabled | `_boolean('KNOWLEDGE_WATCH_ENABLED', False)` |
@@ -123,11 +130,15 @@
 | RESEARCH_ENABLED | `true` |
 | RESEARCH_DB | `.chroma/research.sqlite3` |
 | CHECKPOINT_DB | `.chroma/checkpoints.sqlite3` |
+| CONVERSATION_DB | `.chroma/conversations.sqlite3` |
+| CONVERSATION_CONTEXT_BYTES | `12000` |
+| CONVERSATION_RECENT_TURNS | `3` |
 | MEMORY_VECTOR_DIR | `.chroma/memory` |
 | AGENT_WORKERS | `4` |
 | LLM_CONCURRENCY | `2` |
 | IO_CONCURRENCY | `4` |
 | RESEARCH_MAX_TASKS | `20` |
+| RESEARCH_HARD_MAX_TASKS | `200` |
 | RESEARCH_MAX_ROUNDS | `3` |
 | SPECIALIST_COUNT | `3` |
 | TASK_MAX_ATTEMPTS | `2` |
@@ -135,7 +146,10 @@
 | TASK_WAIT_SECONDS | `240` |
 | LLM_REQUEST_TIMEOUT | `120` |
 | RESEARCH_TIMEOUT | `900` |
+| RESEARCH_TOTAL_TIMEOUT | `1800` |
+| RESEARCH_MAX_MODEL_CALLS | `160` |
 | READING_CHUNK_CHARS | `2200` |
+| READING_VERBATIM_MAX_CHARS | `1200` |
 | MEMORY_RECALL_K | `3` |
 | KNOWLEDGE_DESCRIPTION | `本地财经新闻分析方法知识库，包含新闻来源核验与可信度分级、企业财务影响与重要性分析、事件研究法与市场反应评估；用于解释分析框架和方法，不包含实时新闻事实或个股投资建议。` |
 | NEWS_DESCRIPTION | `只读同花顺新闻库，持续更新，覆盖产经新闻、区域经济、公司新闻、国际财经、财经评论、财经要闻、宏观经济、金融市场和财经人物；支持按关键词、日期和栏目查询，适合回答近期或历史财经新闻问题，不包含通用知识教程和非新闻类公司内部资料。` |
@@ -159,6 +173,8 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 | --- | --- | --- |
 | parser | 'question' | nargs='*'; help='Question to ask (omit for interactive mode)' |
 | parser | '--resume' | metavar='RUN_ID'; help='恢复已保存研究；不与新问题同时使用' |
+| parser | '--conversation' | metavar='ID'; help='接续指定会话（与 --resume 研究恢复不同）；省略时交互模式自动新建' |
+| parser | '--no-conversation' | action='store_true'; help='禁用会话记忆，每题独立执行' |
 | parser | '--runs' | action='store_true'; help='列出最近研究，不调用模型' |
 | parser | '--status' | metavar='RUN_ID'; help='查看任务与最近执行事件' |
 | parser | '--retry-failed' | action='store_true'; help='与 --resume 配合，重新尝试失败子任务' |
@@ -274,7 +290,8 @@ agentic-rag-ingest = "agentic_rag.ingestion:main"
 
 执行模型生成的完整新闻查询：主题/人物/机构、时间、栏目、来源、排序和数量。
 
-API 取完所有摘要页再按精确时间与来源硬过滤；不会自动添加限制或按返回顺序截断。
+未指定候选数时取完摘要页；明确最新N篇时按日期顺序核对主题、时间与来源，收齐N篇后停止。
+不自动添加日期；受控扫描不足N篇时显式报告未完成。
 全部匹配候选及权重保留在 artifact 和研究事件，正文预算外的候选不是无关新闻。
 保留部分失败和摘要降级信息，不把 API 错误等同于没有相关新闻。
 
@@ -286,16 +303,18 @@ API 取完所有摘要页再按精确时间与来源硬过滤；不会自动添�
 | queries | `list[Keyword]` | `Field(min_length=1, max_length=4, description='1至4组分别查询的短主题词；只传一个空字符串表示不限关键词')` |
 | people | `list[Keyword]` | `Field(default_factory=list, max_length=4, description='查询计划识别的人物约束')` |
 | organizations | `list[Keyword]` | `Field(default_factory=list, max_length=4, description='查询计划识别的机构或公司约束')` |
-| topics | `list[Keyword]` | `Field(default_factory=list, max_length=6, description='查询计划识别的主题约束')` |
+| topics | `list[Keyword]` | `Field(default_factory=list, max_length=6, description='查询计划识别的主题线索；并非逐篇硬过滤条件')` |
 | source_names | `list[Keyword]` | `Field(default_factory=list, max_length=4, description='用户明确指定的信息源；为空则不限制')` |
 | start | `str` | `Field(default='', description='已确认的新闻起始日 YYYY-MM-DD；空字符串表示不限制')` |
 | end | `str` | `Field(default='', description='已确认的新闻结束日 YYYY-MM-DD；空字符串表示不限制')` |
 | published_after | `str` | `Field(default='', description='精确发布时间下界 ISO 8601，必须带时区')` |
 | published_before | `str` | `Field(default='', description='精确发布时间上界 ISO 8601，必须带时区')` |
-| section | `str` | `Field(default='', max_length=100, description='用户指定栏目；空字符串表示不限')` |
+| section | `str` | `Field(default='', max_length=80, description='用户指定栏目；空字符串表示不限')` |
 | sort_by | `Literal['relevance', 'newest', 'oldest']` | `Field(default='relevance', description='结果排序')` |
-| coverage | `Literal['focused', 'broad', 'exhaustive']` | `Field(default='focused', description='正文覆盖目标；所有模式均取完匹配候选')` |
-| result_limit | `int` | `Field(default=5, ge=1, le=15, description='本轮读取正文预算，不限制匹配候选数量')` |
+| coverage | `Literal['focused', 'broad', 'exhaustive']` | `Field(default='focused', description='正文覆盖目标；未指定candidate_limit时取完匹配候选')` |
+| result_limit | `int` | `Field(default=5, ge=1, le=100, description='用户要求的正文分析数量')` |
+| candidate_limit | `int` | `Field(default=0, ge=0, le=200, description='用户明确要求的候选数量；0表示未指定')` |
+| ranking_mode | `Literal['relevance', 'impact']` | `'relevance'` |
 
 ### `read_news`
 
@@ -329,11 +348,11 @@ API 取完所有摘要页再按精确时间与来源硬过滤；不会自动添�
 
 | 来源 | 常量 | 值 |
 | --- | --- | --- |
-| src/agentic_rag/research/service.py | READING_VERSION | `'reader-v6-adaptive-model-feedback'` |
-| src/agentic_rag/research/service.py | SPECIALIST_VERSION | `'specialist-v8-adaptive-model-feedback'` |
-| src/agentic_rag/research/service.py | WORKFLOW_VERSION | `'research-workflow-v10-full-news-candidates'` |
-| src/agentic_rag/graph/nodes.py | ANALYSIS_PROMPT_VERSION | `'research-v7-adaptive-model-feedback'` |
-| src/agentic_rag/graph/nodes.py | GRADE_VERSION | `'grade-v4-scoped-structured'` |
+| src/agentic_rag/research/service.py | READING_VERSION | `'reader-v10-verbatim-source'` |
+| src/agentic_rag/research/service.py | SPECIALIST_VERSION | `'specialist-v10-current-date'` |
+| src/agentic_rag/research/service.py | WORKFLOW_VERSION | `'research-workflow-v22-abstract-first'` |
+| src/agentic_rag/graph/nodes.py | ANALYSIS_PROMPT_VERSION | `'research-v17-bounded-delivery'` |
+| src/agentic_rag/graph/nodes.py | GRADE_VERSION | `'grade-v5-evidence-sufficiency'` |
 | src/agentic_rag/ingestion.py | CHUNK_SIZE | `800` |
 | src/agentic_rag/ingestion.py | CHUNK_OVERLAP | `120` |
 | src/agentic_rag/ingestion.py | MANIFEST_VERSION | `1` |

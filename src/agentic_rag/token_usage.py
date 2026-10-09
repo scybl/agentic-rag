@@ -143,7 +143,7 @@ class UsageLedger:
             self.sessions[key] = {**self.sessions.get(key, {}), **event}
 
     def record(self, event):
-        event = {"kind": "token_usage", "session_id": self.session_id, **event}
+        event = {"kind": "token_usage", "session_id": self.session_id, **event, "at": time.time()}
         with self.lock:
             self._apply(event)
             if self.persist:
@@ -240,6 +240,8 @@ def usage_session(ledger, *, scope="question"):
 def meter_node(name, function):
     """不修改 GraphState；每次节点执行单独记账，零调用步骤也可见。"""
     def measured(state):
+        from .budget import check_budget
+        check_budget()
         ledger = active_usage.get()
         if ledger is None:
             return function(state)
@@ -254,8 +256,13 @@ def meter_node(name, function):
         notification = active_notify.set(writer)
         ledger.record({"event": "step_started", **step, "status": "running", "timing_version": 1})
         status = "failed"
+        versions = {}
         try:
             result = function(state)
+            check_budget()
+            if isinstance(result, dict):
+                versions = {key: result[key] for key in ("model_revision", "workflow_revision", "reading_recipe")
+                            if isinstance(result.get(key), str)}
             status = "completed"
             return result
         except KeyboardInterrupt:
@@ -265,7 +272,7 @@ def meter_node(name, function):
             active_step.reset(token)
             with ledger.lock:
                 counts = summarize(c for c in ledger.calls.values() if c.get("step_id") == step["step_id"])
-            ledger.record({"event": "step_finished", **step, "status": status, "usage": counts,
+            ledger.record({"event": "step_finished", **step, **versions, "status": status, "usage": counts,
                            "timing_version": 1, "elapsed": round(perf_counter() - started, 3)})
             active_notify.reset(notification)
     measured.__name__ = name
@@ -299,9 +306,12 @@ class UsageCallback(BaseCallbackHandler):
                 roles[message.type] += _characters(message.content)
         with self.lock:
             self.started[str(run_id)] = time.monotonic()
+        params = kwargs.get("invocation_params") or {}
+        metadata = kwargs.get("metadata") or {}
+        thinking = metadata.get("usage_thinking_requested", self.thinking_requested)
+        model = params.get("model") or params.get("model_name") or metadata.get("ls_model_name", "")
         self.ledger.begin_call(call_id=run_id, operation=self.operation,
-            model=(kwargs.get("invocation_params") or {}).get("model", ""),
-            input_characters=dict(roles), thinking_requested=self.thinking_requested)
+            model=model, input_characters=dict(roles), thinking_requested=thinking)
 
     def _finish(self, run_id, response=None, failed=False):
         metadata, usage = {}, {}

@@ -69,11 +69,39 @@ def test_changed_implementation_requires_review_even_with_same_signature(replica
     assert any("execution.py" in e for e in docs.check(replica))
 
 
+def test_remote_service_patch_requires_review(replica):
+    name = "ops/news_api/reliability.patch"
+    change(replica, name, "idx_agent_source_published_article", "changed_index")
+    assert any(name in error for error in docs.check(replica))
+
+
 @pytest.mark.parametrize("kind", ["source", "document"])
 def test_new_files_are_detected(replica, kind):
     name = "src/agentic_rag/new_source.py" if kind == "source" else "docs/new-guide.md"
     (replica / name).write_text("# New\n", encoding="utf-8")
     assert any(name in e for e in docs.check(replica))
+
+
+def test_suite_labels_require_review_but_generated_reports_do_not(replica):
+    before = docs.inventories(replica)
+    path = replica / "evaluation/reports/check.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"generated": true}', encoding="utf-8")
+    assert docs.inventories(replica) == before
+    name = "evaluation/suites/finance_smoke_v1/suite.json"
+    change(replica, name, '"relevance": 3', '"relevance": 2')
+    assert any(name in e for e in docs.check(replica))
+
+
+@pytest.mark.parametrize("name", ["evaluation/runs/exported_server.py", "evaluation/reports/probe.py",
+                                  "scripts/interview/local_check.py"])
+def test_generated_and_private_python_are_never_read_or_required(replica, name):
+    before = docs.inventories(replica)
+    path = replica / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xffprivate-source")
+    assert docs.inventories(replica) == before
+    assert docs.check(replica) == []
 
 
 def test_deleted_document_and_broken_link_are_detected(replica):
@@ -105,7 +133,10 @@ def test_refresh_does_not_acknowledge_review(replica, monkeypatch):
     assert any("[sources]" in e for e in docs.check(replica))
 
 
-@pytest.mark.parametrize("name", ["docs/Agent求职面试题与参考答案.html", "docs/Interview-notes.md", "docs/iNtErViEw/local.html"])
+@pytest.mark.parametrize("name", ["docs/Agent求职面试题与参考答案.html", "docs/Interview-notes.md", "docs/iNtErViEw/local.html",
+                                  "docs/炫技增强技术设计.md", "docs/项目规划.md", "docs/Roadmap.md",
+                                  "docs/plans/future.md", "docs/planning/design.md", "docs/简历.docx",
+                                  "docs/local.pdf", "docs/notes.docx"])
 def test_private_material_is_optional_unread_and_untouched(replica, monkeypatch, name):
     assert docs.check(replica) == []  # 干净克隆无需个人资料即可检查。
     path = replica / name
@@ -120,10 +151,14 @@ def test_private_material_is_optional_unread_and_untouched(replica, monkeypatch,
     assert name not in docs.read(replica, docs.LOCK)
 
 
-def test_public_link_to_private_material_is_rejected_even_when_local_file_exists(replica):
-    (replica / "docs/面试笔记.html").write_text("private", encoding="utf-8")
+@pytest.mark.parametrize("name", ["面试笔记.html", "炫技增强技术设计.md", "项目规划.md", "Roadmap.md",
+                                  "plans/future.md", "简历.docx"])
+def test_public_link_to_private_material_is_rejected_even_when_local_file_exists(replica, name):
+    private = replica / "docs" / name
+    private.parent.mkdir(parents=True, exist_ok=True)
+    private.write_text("private", encoding="utf-8")
     path = replica / "docs/index.md"
-    path.write_text(docs.read(replica, path) + "\n[private](面试笔记.html)\n", encoding="utf-8")
+    path.write_text(docs.read(replica, path) + f"\n[private]({name})\n", encoding="utf-8")
     assert any("公开文档不能依赖" in e for e in docs.validate_links(replica))
 
 

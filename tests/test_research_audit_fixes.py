@@ -120,6 +120,11 @@ def test_too_many_reading_claims_preserves_bounded_result_without_retry():
     text = "苹果增产。"
     sentences, _ = numbered_sentences(text)
     result = resolve_selection({"claims": [{"kind": "reported_fact", "statement": "增产", "sentence_ids": ["S1"]}] * 9, "limitations": []}, text, sentences)
+    assert len(result["claims"]) == 1  # 同一句不能用重复摘录填满六项。
+    text = "".join(f"事实{i}。" for i in range(1, 10))
+    sentences, _ = numbered_sentences(text)
+    result = resolve_selection({"claims": [{"kind": "reported_fact", "statement": f"事实{i}",
+        "sentence_ids": [f"S{i}"]} for i in range(1, 10)], "limitations": []}, text, sentences)
     assert len(result["claims"]) == 6 and "仅保留前6项" in result["limitations"][0]
     assert SelectedReading.model_json_schema()["properties"]["claims"]["maxItems"] == 6
 

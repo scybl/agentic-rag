@@ -39,8 +39,12 @@ def execute_tool(tool: BaseTool, arguments: dict, *, context: ToolContext | None
     started = time.monotonic()
 
     def emit(event):
+        if event.get("kind") == "tool" and event.get("tool_call_id") and event["tool_call_id"] != call_id:
+            # 嵌套模型校验/重试必须保留自己的工具身份，不能冒充外层新闻搜索。
+            context.emit({"parent_tool_call_id": call_id, **event})
+            return
         context.emit({**event, "tool": tool.name, "tool_call_id": call_id,
-                      "caller": caller, "reason": reason})
+                      "caller": caller, "reason": event.get("reason", reason), "tool_reason": reason})
 
     try:
         # 在写日志之前拒绝额外参数；只展示工具白名单中可公开的查询字段。

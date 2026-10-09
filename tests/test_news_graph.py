@@ -178,6 +178,9 @@ class NewsGraphTests(unittest.TestCase):
             source_names=[],
             sort_by="relevance",
             result_k=5,
+            candidate_limit=0,
+            ranking_mode="relevance",
+            summary_screener=ANY,
             on_event=ANY,
         )
 

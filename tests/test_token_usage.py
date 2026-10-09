@@ -214,7 +214,7 @@ def test_graph_stream_wakes_before_node_finishes_and_summary_is_after_answer():
     graph = StateGraph(dict)
     def route(state):
         chain.invoke({"question": "问"})
-        return {"generation": "最终答案内容"}
+        return {"generation": "最终答案内容", "generation_complete": True, "generation_grounded": True}
     graph.add_node("route", meter_node("route", route))
     graph.add_edge(START, "route")
     graph.add_edge("route", END)

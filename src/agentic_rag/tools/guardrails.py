@@ -77,8 +77,18 @@ def _has_probability_value(text: str) -> bool:
     ))
 
 
+def is_probability_evidence_question(question: str) -> bool:
+    """区分‘现有报道能否支持这个概率’与‘请预测概率’，不把礼貌的能否误判成拒答。"""
+    return bool(_PROBABILITY_WORDS.search(question)
+        and re.search(r"(?:这些|现有|所给|上述|所提供|这篇|这则|这份|该篇).{0,8}(?:报道|材料|证据|资料)", question)
+        and re.search(r"能否|是否(?:足以|能|可以|支持)|足不足以", question)
+        and not re.search(r"帮我预测|请预测|请计算|给出你的估计|能否(?:帮我|为我)?(?:预测|计算|估计|估算)", question))
+
+
 def infer_estimate_kind(question: str, planned: str = "none") -> str:
     """明显的概率措辞由代码兜底，不能被规划模型降级成普通趋势预测。"""
+    if is_probability_evidence_question(question):
+        return "none"
     if _PROBABILITY_WORDS.search(question):
         return "probability"
     return planned

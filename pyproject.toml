@@ -1,7 +1,7 @@
 [project]
 name = "agentic-rag"
-version = "0.1.0"
-description = "Multi-source agentic RAG built with LangGraph: adaptive routing, retrieval grading, self-correction and RAGAS evaluation. 100% open source, runs on CPU."
+version = "1.0.0rc1"
+description = "Auditable local research CLI: bounded LangGraph workflows, versioned reading memory, resumable execution and evidence-based evaluation."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -25,10 +25,12 @@ dependencies = [
     "ddgs>=9.0",
     "pypdf>=5.0",
     "python-dotenv>=1.0",
+    "pydantic>=2.7,<3",
 ]
 
 [project.optional-dependencies]
 eval = ["ragas>=0.4", "datasets>=2.0", "pandas>=2.0"]
+retrieval-eval = ["ranx>=0.3.20,<0.4"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
@@ -41,3 +43,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# 验收归档可能含旧发布包，不能把其中的同名测试当成当前源码测试收集。
+testpaths = ["tests"]

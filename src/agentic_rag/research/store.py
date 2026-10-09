@@ -147,6 +147,13 @@ class ResearchStore:
             return dict(row) if row else None
 
     def event(self, run_id, data):
+        # 调用者显式字段优先；copy_context 让工作线程继承所属节点/执行编号。
+        from ..token_usage import active_step, active_task, active_usage
+        ledger = active_usage.get()
+        context = {**(active_step.get() or {}), **(active_task.get() or {})}
+        if ledger is not None:
+            context["session_id"] = ledger.session_id
+        data = {"at": time.time(), **context, **data}
         with self.connect() as db:
             db.execute("INSERT INTO events(run_id,at,data) VALUES(?,?,?)", (run_id, time.time(), encoded(data)))
 
@@ -209,12 +216,18 @@ class ResearchStore:
         total = len(article["chunks"])
         status = "complete" if covered == total and total else "partial"
         claims = []
+        from ..evidence import event_context, FORECAST_WORDS
         for chunk, result in results:
             for claim in result["claims"]:
                 offset = chunk["body"].find(claim["quote"])
                 if offset < 0:
                     raise ValueError("阅读成果引用不在原文中")
-                claims.append({**claim, "chunk_id": chunk["id"], "start": chunk["start"] + offset,
+                background = event_context(article["body"], chunk["start"] + offset)
+                kind = claim["kind"]
+                if kind == "reported_fact" and FORECAST_WORDS.search(background + claim["quote"]):
+                    kind = "attributed_forecast"
+                claims.append({**claim, "kind": kind, "event_context": background,
+                               "chunk_id": chunk["id"], "start": chunk["start"] + offset,
                                "end": chunk["start"] + offset + len(claim["quote"])})
         result = {"claims": claims, "limitations": [x for _, r in results for x in r.get("limitations", [])],
                   "task_keys": list(dict.fromkeys(chunk["task_key"] for chunk, _ in results if chunk.get("task_key")))}
@@ -228,8 +241,10 @@ class ResearchStore:
             if status == "complete":
                 self._keywords(db, reading_id, article["metadata"], result)
             # 成果与待写入向量在同一事务提交；索引故障不重复调用模型。
-            for chunk, read in results:
-                text = "\n".join(f"{c['kind']}：{c['statement']}；原文：{c['quote']}" for c in read["claims"])
+            for chunk, _ in results:
+                # 向量投影与关系库使用同一份校验后的类型和时间背景，避免召回旧的错误分类。
+                text = "\n".join(f"{c['kind']}：{c['statement']}；事件背景：{c['event_context']}；原文：{c['quote']}"
+                                 for c in claims if c["chunk_id"] == chunk["id"])
                 if text:
                     self._vector(db, "note:" + fingerprint([reading_id, chunk["id"]]), "reading_memory", text,
                                  {"article_id": article["id"], "version_id": article["version"], "reading_id": reading_id,
@@ -268,8 +283,8 @@ class ResearchStore:
     def submit(self, run_id, key, kind, payload, dependencies, budget):
         with self.connect(immediate=True) as db:
             known = db.execute("SELECT 1 FROM run_tasks WHERE run_id=? AND task_key=?", (run_id, key)).fetchone()
-            count = db.execute("SELECT count(*) FROM run_tasks WHERE run_id=?", (run_id,)).fetchone()[0]
-            if not known and count >= budget:
+            count = db.execute("SELECT count(*) FROM run_tasks WHERE run_id=?", (run_id,)).fetchone()[0] if budget is not None else 0
+            if not known and budget is not None and count >= budget:
                 return False
             db.execute("INSERT OR IGNORE INTO tasks(key,kind,payload,status,updated) VALUES(?,?,?,?,?)", (key, kind, encoded(payload), "pending", time.time()))
             db.execute("INSERT OR IGNORE INTO run_tasks VALUES(?,?,?)", (run_id, key, encoded(dependencies)))
@@ -320,11 +335,16 @@ class ResearchStore:
 
     def abandon(self, owner):
         with self.connect() as db:
-            db.execute("UPDATE tasks SET status='pending',owner=NULL,lease_until=0 WHERE owner=? AND status='running'", (owner,))
+            db.execute("UPDATE tasks SET status='pending',owner=NULL,lease_until=0,attempts=max(0,attempts-1) WHERE owner=? AND status='running'", (owner,))
+
+    def defer_budget(self, key, owner):
+        """本轮预算不够不是材料永久失败；不消耗一次尚未完成的任务尝试。"""
+        with self.connect() as db:
+            db.execute("UPDATE tasks SET status='pending',owner=NULL,lease_until=0,attempts=max(0,attempts-1),retryable=1 WHERE key=? AND owner=? AND status='running'", (key, owner))
 
     def retry_failed(self, run_id):
         with self.connect() as db:
-            return db.execute("UPDATE tasks SET status='pending',attempts=0,error=NULL,retryable=1 WHERE status='failed' AND key IN (SELECT task_key FROM run_tasks WHERE run_id=?)", (run_id,)).rowcount
+            return db.execute("UPDATE tasks SET status='pending',attempts=0,error=NULL,retryable=1 WHERE (status='failed' OR (status='pending' AND attempts>0)) AND key IN (SELECT task_key FROM run_tasks WHERE run_id=?)", (run_id,)).rowcount
 
     def cache_get(self, key):
         with self.connect() as db:

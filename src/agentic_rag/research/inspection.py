@@ -14,6 +14,17 @@ def has_pending_work(snapshot):
     return bool(snapshot.next or getattr(snapshot, "tasks", ()))
 
 
+def recoverable_reading(snapshot):
+    """仅识别旧流程在 END 留下的半读成果；普通历史答案仍可离线查看。"""
+    from .service import WORKFLOW_VERSION
+    state = snapshot.values
+    return (not has_pending_work(snapshot) and not state.get("generation_complete")
+            and bool(state.get("model_revision") and state.get("reading_recipe"))
+            and bool(state.get("research_documents"))
+            and state.get("workflow_revision") in {"research-workflow-v21-bounded-delivery", WORKFLOW_VERSION}
+            and any(r.get("status") != "complete" for r in state.get("reading_reports", [])))
+
+
 def read_snapshot(run_id, path=None):
     from langgraph.checkpoint.sqlite import SqliteSaver
     from ..graph.build import build_graph
@@ -43,15 +54,25 @@ def inspect_research(database, run_id, *, snapshot=None):
         checkpoint_error = f"检查点不可读（{type(exc).__name__}）：{exc}"
         unfinished = None
     steps = list(ledger.steps.values())
-    failure = next((e for e in reversed(events) if e.get("kind") == "run_failure"), None)
+    failures = [(index, event) for index, event in enumerate(events) if event.get("kind") == "run_failure"]
+    session_start = max((index for index, event in enumerate(events)
+                         if event.get("kind") == "token_usage" and event.get("event") == "session_started"), default=-1)
+    last_failure = failures[-1][1] if failures else None
+    failure = (last_failure if failures and failures[-1][0] > session_start
+               and run["status"] in {"failed", "interrupted", "needs_attention"} else None)
     if failure is None and run["status"] == "interrupted":
         failure = {"error_type": "KeyboardInterrupt", "message": "旧记录显示程序捕获中断；无法确定由键盘、终端停止还是外部信号触发。"}
     tool_calls = {e.get("tool_call_id") for e in events if e.get("kind") == "tool" and e.get("phase") == "started"}
     reading = state.get("reading_reports", [])
+    if "read_documents" in pending:
+        latest = next((e for e in reversed(events) if e.get("kind") == "research" and e.get("event") == "reading_pending"), None)
+        if latest:
+            reading = latest["reports"]
     return {
         "run": run, "token_usage": ledger.report(), "last_step": steps[-1] if steps else None,
         "pending_nodes": pending, "staged_nodes": staged, "has_pending_work": unfinished,
         "checkpoint_error": checkpoint_error, "failure": failure,
+        "last_failure": last_failure,
         "counts": {"tool_calls": len(tool_calls), "tasks": dict(Counter(t['status'] for t in tasks)),
                    "evidence": len(state.get("documents", [])), "articles_read": len(reading),
                    "segments_read": sum(r.get("covered", 0) for r in reading),

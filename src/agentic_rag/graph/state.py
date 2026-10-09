@@ -6,6 +6,10 @@ from langchain_core.documents import Document
 
 
 class GraphState(TypedDict, total=False):
+    conversation_id: str  # 会话编号；不复用为 LangGraph thread_id
+    conversation_revision: int  # 会话快照版本，防并发覆盖
+    user_question: str  # 未经指代消解的逐字用户输入
+    conversation_resolution: dict[str, Any]  # 改写/澄清、原文引用与压缩计量
     run_id: str
     model_revision: str
     reading_recipe: str
@@ -15,6 +19,10 @@ class GraphState(TypedDict, total=False):
     memory_documents: list[Document]
     reading_reports: list[dict[str, Any]]
     specialist_findings: list[dict[str, Any]]
+    specialist_execution: dict[str, Any]
+    task_contract: dict[str, Any]
+    task_budget: int
+    execution_violations: list[str]
     evidence_signature: str
     no_progress_rounds: int
     question: str  # 当前问题；主流程保留原意，具体检索词单独记录

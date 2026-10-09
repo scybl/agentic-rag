@@ -6,16 +6,21 @@
 
 import json
 import os
+import re
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from .news_plan import validate_api_query
 
 try:
     from dotenv import load_dotenv
+    from .config import PROJECT_ROOT
 
-    load_dotenv()
+    load_dotenv(PROJECT_ROOT / ".env")
 except ImportError:  # pragma: no cover - the client also works without python-dotenv
     pass
 
@@ -25,9 +30,26 @@ DEFAULT_BASE_URL = "https://106.54.27.114:3001"
 class NewsAPIError(RuntimeError):
     """请求失败或服务器返回了非预期响应。"""
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(self, message: str, status_code: int | None = None, retry_after: float | None = None,
+                 *, retryable: bool = True, error_code: str = "", request_id: str = "") -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = retryable
+        self.error_code = error_code
+        self.request_id = request_id
+
+
+def _request_id(value) -> str:
+    """仅接受服务生成的关联编号，避免任意响应内容进入错误日志。"""
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{32}", value) else ""
+
+
+class _NoCredentialRedirect(HTTPRedirectHandler):
+    """API 地址须显式配置；禁止重定向绕过 HTTPS/目标主机约束并携带密钥。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class NewsClient:
@@ -38,6 +60,8 @@ class NewsClient:
         api_key: str | None = None,
         base_url: str | None = None,
         timeout: float = 15,
+        max_attempts: int = 3,
+        on_retry: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.base_url = (base_url or os.getenv("NEWS_API_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         parsed = urlsplit(self.base_url)
@@ -54,30 +78,109 @@ class NewsClient:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         self.timeout = timeout
+        if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 3:
+            raise ValueError("max_attempts must be an integer from 1 to 3")
+        self.max_attempts = max_attempts
+        self.on_retry = on_retry
         # 不将密钥转发给从环境中继承的代理服务器。
-        self._opener = build_opener(ProxyHandler({}))
+        self._opener = build_opener(ProxyHandler({}), _NoCredentialRedirect())
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        from .research.runtime import io_capacity
-        with io_capacity().slot():
-            return self._request(path, params)
+        from .research.runtime import io_capacity, task_context
+        for attempt in range(1, self.max_attempts + 1):
+            from .budget import check_budget
+            check_budget()
+            try:
+                with io_capacity().slot():
+                    return self._request(path, params)
+            except NewsAPIError as exc:
+                delay = exc.retry_after if exc.retry_after is not None else 0.5 * attempt
+                if (not exc.retryable or exc.status_code not in {429, 502, 503, 504}
+                        or attempt == self.max_attempts or not 0 <= delay <= 5):
+                    raise
+                if self.on_retry:
+                    self.on_retry({"kind": "news_retry", "status_code": exc.status_code,
+                                   "attempt": attempt + 1, "max_attempts": self.max_attempts,
+                                   "delay": delay, "query": (params or {}).get("q", ""),
+                                   "error_code": exc.error_code, "request_id": exc.request_id,
+                                   "path": path})
+                # 等待时不占 I/O 槽位；有任务上下文时支持取消，避免超时后继续提交请求。
+                context = task_context.get()
+                if context:
+                    if context["cancel"].wait(delay) or time.monotonic() >= context["deadline"]:
+                        raise TimeoutError("新闻重试已取消或超时") from exc
+                else:
+                    time.sleep(delay)
 
     def _request(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = self.base_url + path
         if params:
             url += "?" + urlencode(params)
         request = Request(url, headers={"X-API-Key": self.api_key}, method="GET")
+        from .budget import active_budget
+        budget = active_budget.get()
+        if budget:
+            budget.check()
+        remaining = budget.remaining() if budget else None
+        timeout = min(self.timeout, max(0.1, remaining)) if remaining is not None else self.timeout
         try:
-            with self._opener.open(request, timeout=self.timeout) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 payload = json.load(response)
+                request_id = _request_id((getattr(response, "headers", None) or {}).get("X-Request-ID"))
         except HTTPError as exc:
-            raise NewsAPIError(f"News API returned HTTP {exc.code}", exc.code) from exc
+            # 服务用 503 同时表示临时不可用和查询超时；只识别已知错误协议，
+            # 不把任意响应正文（可能含代理页面/敏感信息）回显到终端或模型。
+            try:
+                error_payload = json.loads(exc.read(4096))
+            except (ValueError, OSError):
+                error_payload = {}
+            if not isinstance(error_payload, dict):
+                error_payload = {}
+            message = error_payload.get("error", "")
+            known_codes = {"query_timeout", "database_unavailable", "busy", "internal_error"}
+            error_code = error_payload.get("error_code")
+            error_code = error_code if isinstance(error_code, str) and error_code in known_codes else ""
+            request_id = _request_id((exc.headers or {}).get("X-Request-ID")) or _request_id(error_payload.get("request_id"))
+            legacy_deadline = (exc.code == 503 and not error_code and isinstance(message, str)
+                              and message.startswith("Query unavailable or exceeded ")
+                              and message.endswith(" seconds; narrow the date range"))
+            query_deadline = error_code == "query_timeout" or legacy_deadline
+            retry_after = None
+            hint = (exc.headers or {}).get("Retry-After")
+            if hint:
+                try:
+                    retry_after = float(hint)
+                except ValueError:
+                    # HTTP 日期格式或不可解析提示不猜测等待时间，交由用户稍后重试。
+                    retry_after = float("inf")
+            exc.close()
+            description = f"News API returned HTTP {exc.code}"
+            if 300 <= exc.code < 400:
+                description += "：拒绝自动跳转，防止认证密钥被转发；请核对 NEWS_API_BASE_URL"
+            elif query_deadline:
+                description += "：服务端报告查询不可用或超过查询时限；停止重试相同请求，未自动缩小时间范围"
+            elif error_code == "database_unavailable":
+                description += "：新闻数据库暂时不可用"
+            elif error_code == "busy":
+                description += "：新闻接口并发槽位已满"
+            elif error_code == "internal_error":
+                description += "：新闻服务内部错误，不应当作查询超时"
+            if request_id:
+                description += f" [request_id={request_id}]"
+            retryable = (exc.code in {429, 502, 503, 504} and not query_deadline
+                         and error_code != "internal_error" and error_payload.get("retryable") is not False)
+            raise NewsAPIError(description, exc.code, retry_after, retryable=retryable,
+                               error_code=error_code, request_id=request_id) from exc
         except URLError as exc:
-            raise NewsAPIError("Could not connect to the news API") from exc
+            raise NewsAPIError(f"Could not connect to the news API ({type(exc.reason).__name__})") from exc
+        except TimeoutError as exc:
+            raise NewsAPIError("News API request timed out") from exc
         except (UnicodeError, json.JSONDecodeError) as exc:
             raise NewsAPIError("News API returned invalid JSON") from exc
         if not isinstance(payload, dict):
             raise NewsAPIError("News API returned an unexpected response")
+        if request_id:
+            payload["request_id"] = request_id
         return payload
 
     def health(self) -> dict[str, Any]:
@@ -96,6 +199,7 @@ class NewsClient:
         include_content: bool = False,
     ) -> dict[str, Any]:
         """获取一页新闻；日期是包含边界的 Asia/Shanghai 日期。"""
+        validate_api_query(q, section)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer from 1 to 100")
         if order not in {"asc", "desc"}:
@@ -174,6 +278,7 @@ class NewsClient:
                 on_event({
                     "kind": "news_page", "page": page_number,
                     "count": len(items), "has_more": bool(page.get("has_more")),
+                    "request_id": _request_id(page.get("request_id")),
                 })
             for item in items:
                 if not isinstance(item, dict):

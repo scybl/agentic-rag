@@ -32,6 +32,7 @@ from agentic_rag.config import settings
 from agentic_rag.graph.build import build_graph
 from agentic_rag.ingestion import ensure_index, get_embeddings
 from agentic_rag.ollama_connection import ollama_client_kwargs
+from agentic_rag.evaluation.answer_samples import actual_contexts
 
 DATASET_PATH = Path(__file__).parent / "dataset.json"
 RESULTS_PATH = Path(__file__).parent / "results.csv"
@@ -49,9 +50,7 @@ def collect_samples(graph, cases: list[dict]) -> list[SingleTurnSample]:
             SingleTurnSample(
                 user_input=case["question"],
                 response=result["generation"],
-                retrieved_contexts=[
-                    doc.page_content for doc in result.get("documents", [])
-                ],
+                retrieved_contexts=actual_contexts(result),
                 reference=case["ground_truth"],
             )
         )

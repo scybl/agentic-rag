@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "suite_id": "finance_smoke_v1",
+  "version": "1.0.0",
+  "provenance": "人工编写的合成工程样本，所有机构、产区、金额和新闻均虚构。用于协议/排序回归，不是现实金融事实或泛化效果基准。dev/test 为流程隔离演示，共用语料，不用于声称独立测试集性能。",
+  "synthetic": true,
+  "documents": [
+    {
+      "document_id": "apple-supply",
+      "title": "北岭产区苹果库存同比下降",
+      "summary": "虚构周报：北岭产区苹果库存为120万吨，同比下降20%，同比基期为150万吨。",
+      "body": "本材料为工程测试而编写。2025年3月1日虚构周报：北岭产区苹果库存120万吨，去年同口径150万吨，同比下降20%。仅覆盖北岭产区，不代表全国。",
+      "published_at": "2025-03-01T09:00:00+08:00",
+      "source": "合成库存周报"
+    },
+    {
+      "document_id": "apple-demand",
+      "title": "苹果下游采购放缓",
+      "summary": "虚构调研：苹果批发采购量同比减少10%，需求转弱可能抵消库存下降影响。",
+      "body": "本材料为工程测试而编写。2025年3月2日下游苹果采购量同比减少10%。该样本只覆盖三个批发市场，不构成全国统计，不能据此单独预测期货价格。",
+      "published_at": "2025-03-02T10:00:00+08:00",
+      "source": "合成需求调研"
+    },
+    {
+      "document_id": "apple-phone",
+      "title": "苹果公司发布手机新品",
+      "summary": "虚构科技新闻：苹果公司发布新手机，与水果苹果库存没有关系。",
+      "body": "本材料为工程测试而编写。苹果公司宣布一款手机新品。本新闻讨论消费电子业务，不讨论农产品供需。",
+      "published_at": "2025-03-03T10:00:00+08:00",
+      "source": "合成科技新闻"
+    },
+    {
+      "document_id": "rate-old",
+      "title": "星河银行旧版利率公告",
+      "summary": "虚构公告：星河银行2025年1月1日起一年期存款利率为2.0%。",
+      "body": "本材料为工程测试而编写。星河银行2025年1月1日起一年期存款利率2.0%，仅为历史公告，后续可能更新。",
+      "published_at": "2025-01-01T08:00:00+08:00",
+      "source": "合成银行公告"
+    },
+    {
+      "document_id": "rate-new",
+      "title": "星河银行下调一年期存款利率",
+      "summary": "虚构公告：星河银行2025年3月1日起一年期存款利率由2.0%下调至1.8%。",
+      "body": "本材料为工程测试而编写。星河银行新公告于2025年3月1日生效：一年期存款利率1.8%，取代1月公告的2.0%。这是存款利率，不是贷款利率或央行政策利率。",
+      "published_at": "2025-03-01T08:00:00+08:00",
+      "source": "合成银行新公告"
+    },
+    {
+      "document_id": "rate-comment",
+      "title": "评论员预期未来可能继续降息",
+      "summary": "虚构评论：作者认为下季度可能降息，但没有概率模型或市场定价数据。",
+      "body": "本材料为工程测试而编写。评论员认为需求疲弱可能促使下一季度降息。该观点不是已发生事实，也未提供事件定义、样本频率或数值概率。",
+      "published_at": "2025-03-04T08:00:00+08:00",
+      "source": "合成署名评论"
+    },
+    {
+      "document_id": "steel-correction",
+      "title": "远山钢铁更正年度营收",
+      "summary": "虚构更正公告：远山钢铁2024年营收为12亿元，旧报道的120亿元是单位换算错误。",
+      "body": "本材料为工程测试而编写。2025年3月5日，远山钢铁更正2024年营收为12亿元。旧报道120亿元错误，应撤回。更正未讨论利润。",
+      "published_at": "2025-03-05T08:00:00+08:00",
+      "source": "合成更正公告"
+    },
+    {
+      "document_id": "steel-old",
+      "title": "远山钢铁年度营收旧报道",
+      "summary": "虚构旧报道：远山钢铁2024年营收120亿元；后续更正公告指出该数值错误。",
+      "body": "本材料为工程测试而编写。2025年2月28日旧报道写远山钢铁2024年营收120亿元。该报道后来被更正，不应当作当前有效数值。",
+      "published_at": "2025-02-28T08:00:00+08:00",
+      "source": "合成旧报道"
+    },
+    {
+      "document_id": "copper-export",
+      "title": "铜出口量与出口额的区别",
+      "summary": "虚构月报：铜出口量为2万吨，出口额14亿元，均为2025年2月数据。",
+      "body": "本材料为工程测试而编写。2025年2月铜出口量2万吨，出口额14亿元。数量和金额不能互换；未给去年同期数据，无法直接算同比增速。",
+      "published_at": "2025-03-06T08:00:00+08:00",
+      "source": "合成贸易月报"
+    },
+    {
+      "document_id": "undated-policy",
+      "title": "未注明日期的关税调整消息",
+      "summary": "虚构转载：某地区拟调整关税，原文没有发布时间、生效日期或确定税率。",
+      "body": "本材料为工程测试而编写。某地区拟调整关税。转载缺少原始来源链接、发布时间、生效日期和最终税率。不能据此断言这是最近一周已经落地的政策。",
+      "published_at": null,
+      "source": "合成无日期转载"
+    },
+    {
+      "document_id": "oil-shipping",
+      "title": "航线运费上涨",
+      "summary": "虚构市场简报：航线运费上涨可能推升进口原油到岸成本，其他条件尚不明确。",
+      "body": "本材料为工程测试而编写。2025年3月7日某航线运费上涨。运费只是原油到岸成本的一部分，还需原油基准价格、汇率和合同信息才能量化成本变化。",
+      "published_at": "2025-03-07T08:00:00+08:00",
+      "source": "合成航运简报"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "F001",
+      "category": "fact",
+      "split": "dev",
+      "answerable": true,
+      "question": "北岭产区苹果库存是多少？",
+      "qrels": [
+        {
+          "document_id": "apple-supply",
+          "relevance": 3
+        }
+      ],
+      "reference_answer": "同口径库存120万吨，仅覆盖北岭产区。",
+      "key_evidence": [
+        "apple-supply：120万吨"
+      ],
+      "forbidden_claims": [
+        "全国库存为120万吨"
+      ],
+      "risk_obligations": [
+        "范围"
+      ],
+      "rubric": [
+        "库存数值、单位与产区均正确"
+      ]
+    },
+    {
+      "case_id": "F002",
+      "category": "time_sensitive",
+      "split": "dev",
+      "answerable": true,
+      "question": "截至2025年3月2日，星河银行一年期存款利率是多少？",
+      "qrels": [
+        {
+          "document_id": "rate-new",
+          "relevance": 3
+        },
+        {
+          "document_id": "rate-old",
+          "relevance": 1
+        }
+      ],
+      "reference_answer": "新公告生效后为1.8%，1月的2.0%已被取代。",
+      "key_evidence": [
+        "rate-new：3月1日生效"
+      ],
+      "forbidden_claims": [
+        "当前仍是2.0%",
+        "将存款利率说成政策利率"
+      ],
+      "risk_obligations": [
+        "有效时间",
+        "指标类型"
+      ],
+      "rubric": [
+        "区分公告日期与生效日期，使用新版本"
+      ]
+    },
+    {
+      "case_id": "F003",
+      "category": "entity",
+      "split": "dev",
+      "answerable": true,
+      "question": "苹果库存下降指的是水果还是手机公司的库存？",
+      "qrels": [
+        {
+          "document_id": "apple-supply",
+          "relevance": 3
+        },
+        {
+          "document_id": "apple-phone",
+          "relevance": 0
+        }
+      ],
+      "reference_answer": "库存下降报道指北岭产区的水果苹果，不能归因于手机销售。",
+      "key_evidence": [
+        "apple-supply：产区库存"
+      ],
+      "forbidden_claims": [
+        "苹果公司手机库存下降20%"
+      ],
+      "risk_obligations": [
+        "实体消歧"
+      ],
+      "rubric": [
+        "不混淆同名实体"
+      ]
+    },
+    {
+      "case_id": "F004",
+      "category": "multi_hop",
+      "split": "dev",
+      "answerable": true,
+      "question": "库存与需求变化对苹果价格的影响方向是否一致？",
+      "qrels": [
+        {
+          "document_id": "apple-supply",
+          "relevance": 3
+        },
+        {
+          "document_id": "apple-demand",
+          "relevance": 3
+        }
+      ],
+      "reference_answer": "库存下降可能支撑价格，采购减弱可能压制价格，两者方向相反，不能直接量化净影响。",
+      "key_evidence": [
+        "apple-supply：库存下降",
+        "apple-demand：采购量减少"
+      ],
+      "forbidden_claims": [
+        "价格必涨20%"
+      ],
+      "risk_obligations": [
+        "反向因素",
+        "因果传导"
+      ],
+      "rubric": [
+        "联合两个来源并交代条件限制"
+      ]
+    },
+    {
+      "case_id": "F005",
+      "category": "forecast",
+      "split": "test",
+      "answerable": false,
+      "question": "只根据这些材料，明日苹果期货收盘价是多少？",
+      "qrels": [
+        {
+          "document_id": "apple-supply",
+          "relevance": 2
+        },
+        {
+          "document_id": "apple-demand",
+          "relevance": 2
+        }
+      ],
+      "reference_answer": "缺少合约、基准价格和预测模型，不能给出具体收盘价；可做有条件的供需分析。",
+      "key_evidence": [
+        "apple-supply：库存信息不足以预测价格"
+      ],
+      "forbidden_claims": [
+        "编造具体收盘价",
+        "确定性上涨"
+      ],
+      "risk_obligations": [
+        "价格基准",
+        "预测期限",
+        "模型"
+      ],
+      "rubric": [
+        "区分条件分析与可验证数值预测"
+      ]
+    },
+    {
+      "case_id": "F006",
+      "category": "probability",
+      "split": "test",
+      "answerable": false,
+      "question": "评论能否证明下季度降息概率为80%？",
+      "qrels": [
+        {
+          "document_id": "rate-comment",
+          "relevance": 2
+        },
+        {
+          "document_id": "rate-new",
+          "relevance": 1
+        }
+      ],
+      "reference_answer": "不能，材料只有主观方向观点，缺少事件定义、概率方法和校准数据。",
+      "key_evidence": [
+        "rate-comment：没有概率模型"
+      ],
+      "forbidden_claims": [
+        "降息概率80%",
+        "用存款利率倒算政策概率"
+      ],
+      "risk_obligations": [
+        "目标事件",
+        "概率方法",
+        "校准"
+      ],
+      "rubric": [
+        "不把评论或利率水平当成概率"
+      ]
+    },
+    {
+      "case_id": "F007",
+      "category": "unanswerable",
+      "split": "test",
+      "answerable": false,
+      "question": "远山钢铁2025年第四季度净利润是多少？",
+      "qrels": [],
+      "reference_answer": "材料未披露该季度净利润，应说明缺失并拒绝编造。",
+      "key_evidence": [
+        "语料中没有该期净利润"
+      ],
+      "forbidden_claims": [
+        "把营收当净利润",
+        "编造四季度利润"
+      ],
+      "risk_obligations": [
+        "期间",
+        "指标"
+      ],
+      "rubric": [
+        "明确无答案，不偷换年度和指标"
+      ]
+    },
+    {
+      "case_id": "F008",
+      "category": "conflict",
+      "split": "dev",
+      "answerable": true,
+      "question": "远山钢铁2024年营收到底是12亿还是120亿？",
+      "qrels": [
+        {
+          "document_id": "steel-correction",
+          "relevance": 3
+        },
+        {
+          "document_id": "steel-old",
+          "relevance": 2
+        }
+      ],
+      "reference_answer": "更正后的有效数值为12亿元，旧报道120亿元已撤回。",
+      "key_evidence": [
+        "steel-correction：更正并撤回旧值"
+      ],
+      "forbidden_claims": [
+        "取两值平均",
+        "继续引用旧报道当有效数值"
+      ],
+      "risk_obligations": [
+        "版本冲突"
+      ],
+      "rubric": [
+        "说明更正来源和旧结论失效"
+      ]
+    },
+    {
+      "case_id": "F009",
+      "category": "numeric_unit",
+      "split": "dev",
+      "answerable": true,
+      "question": "2025年2月铜出口量和出口额分别是多少？",
+      "qrels": [
+        {
+          "document_id": "copper-export",
+          "relevance": 3
+        }
+      ],
+      "reference_answer": "出口量2万吨，出口额14亿元。",
+      "key_evidence": [
+        "copper-export：数量2万吨、金额14亿元"
+      ],
+      "forbidden_claims": [
+        "出口量14亿元",
+        "同比增长2%"
+      ],
+      "risk_obligations": [
+        "单位",
+        "统计口径"
+      ],
+      "rubric": [
+        "保留完整数字、单位和对应指标"
+      ]
+    },
+    {
+      "case_id": "F010",
+      "category": "unknown_date",
+      "split": "test",
+      "answerable": false,
+      "question": "这些关税消息能否算作最近一周已经实施的政策？",
+      "qrels": [
+        {
+          "document_id": "undated-policy",
+          "relevance": 2
+        }
+      ],
+      "reference_answer": "不能确认，材料缺发布时间和生效日期，且仅称拟调整。",
+      "key_evidence": [
+        "undated-policy：日期未知且尚属拟议"
+      ],
+      "forbidden_claims": [
+        "最近一周已实施",
+        "编造税率"
+      ],
+      "risk_obligations": [
+        "日期",
+        "事实与计划"
+      ],
+      "rubric": [
+        "未知日期不冒充近期，拟议不冒充实施"
+      ]
+    }
+  ]
+}

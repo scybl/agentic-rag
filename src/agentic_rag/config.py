@@ -4,14 +4,28 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+
+def _project_root() -> Path:
+    """源码安装沿用仓库根；wheel安装使用工作目录，避免写入Python环境目录。"""
+    explicit = os.getenv("AGENTIC_RAG_HOME")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    package = Path(__file__).resolve().parent
+    repository = package.parents[1]
+    if (repository / "pyproject.toml").is_file() and package == repository / "src/agentic_rag":
+        return repository
+    return Path.cwd().resolve()
+
+
+PROJECT_ROOT = _project_root()
+
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(PROJECT_ROOT / ".env")
 except ImportError:  # pragma: no cover - dotenv 是可选依赖
     pass
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _path(env_var: str, default: str) -> str:
@@ -80,18 +94,25 @@ class Settings:
     research_enabled: bool = _boolean("RESEARCH_ENABLED", True)
     research_db: str = field(default_factory=lambda: _path("RESEARCH_DB", ".chroma/research.sqlite3"))
     checkpoint_db: str = field(default_factory=lambda: _path("CHECKPOINT_DB", ".chroma/checkpoints.sqlite3"))
+    conversation_db: str = field(default_factory=lambda: _path("CONVERSATION_DB", ".chroma/conversations.sqlite3"))
+    conversation_context_bytes: int = int(os.getenv("CONVERSATION_CONTEXT_BYTES", "12000"))
+    conversation_recent_turns: int = int(os.getenv("CONVERSATION_RECENT_TURNS", "3"))
     memory_vector_dir: str = field(default_factory=lambda: _path("MEMORY_VECTOR_DIR", ".chroma/memory"))
     agent_workers: int = int(os.getenv("AGENT_WORKERS", "4"))
     llm_concurrency: int = int(os.getenv("LLM_CONCURRENCY", "2"))
     io_concurrency: int = int(os.getenv("IO_CONCURRENCY", "4"))
     research_max_tasks: int = int(os.getenv("RESEARCH_MAX_TASKS", "20"))
+    research_hard_max_tasks: int = int(os.getenv("RESEARCH_HARD_MAX_TASKS", "200"))
     research_max_rounds: int = int(os.getenv("RESEARCH_MAX_ROUNDS", "3"))
     task_max_attempts: int = int(os.getenv("TASK_MAX_ATTEMPTS", "2"))
     task_lease_seconds: int = int(os.getenv("TASK_LEASE_SECONDS", "180"))
     task_wait_seconds: int = int(os.getenv("TASK_WAIT_SECONDS", "240"))
     llm_request_timeout: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
     research_timeout: int = int(os.getenv("RESEARCH_TIMEOUT", "900"))
+    research_total_timeout: int = int(os.getenv("RESEARCH_TOTAL_TIMEOUT", "1800"))
+    research_max_model_calls: int = int(os.getenv("RESEARCH_MAX_MODEL_CALLS", "160"))
     reading_chunk_chars: int = int(os.getenv("READING_CHUNK_CHARS", "2200"))
+    reading_verbatim_max_chars: int = int(os.getenv("READING_VERBATIM_MAX_CHARS", "1200"))
     memory_recall_k: int = int(os.getenv("MEMORY_RECALL_K", "3"))
     specialist_count: int = int(os.getenv("SPECIALIST_COUNT", "3"))
     knowledge_watch_enabled: bool = _boolean("KNOWLEDGE_WATCH_ENABLED", False)

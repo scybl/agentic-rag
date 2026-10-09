@@ -29,6 +29,8 @@ class Capacity:
         acquired = False
         try:
             while not acquired:
+                from ..budget import check_budget
+                check_budget()
                 if context and (context["cancel"].is_set() or time.monotonic() > context["deadline"]):
                     raise TimeoutError("研究任务取消或超时")
                 acquired = self.semaphore.acquire(timeout=0.2)

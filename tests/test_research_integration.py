@@ -103,10 +103,10 @@ def test_future_prediction_gap_does_not_force_another_search(tmp_path):
 def test_invalid_specialist_citation_fails_without_polluting_vector_memory(tmp_path):
     database = ResearchStore(tmp_path / "research.sqlite")
     state = {"question": "预测", "run_id": "r", "task_type": "forecast", "model_revision": "v", "answer_documents": [Document(page_content="基准")], "evidence_context": "[E1] 基准", "evidence_needs": ["供给"]}
-    result = service.dispatch_specialists(state, database=database, index=NoIndex(), analyze_fn=lambda p: {
-        "summary": "错误编号 [E99]", "evidence_ids": ["E1"], "limitations": [], "needs_more_evidence": False,
-        "news_queries": [], "web_queries": []})
-    assert not result["specialist_findings"]
+    with pytest.raises(service.ResearchWorkPending, match="专题任务"):
+        service.dispatch_specialists(state, database=database, index=NoIndex(), analyze_fn=lambda p: {
+            "summary": "错误编号 [E99]", "evidence_ids": ["E1"], "limitations": [], "needs_more_evidence": False,
+            "news_queries": [], "web_queries": []})
     assert database.tasks("r")[0]["status"] == "failed"
     assert not database.pending_vectors("test")
 
@@ -124,13 +124,14 @@ def test_same_excerpt_with_new_original_version_invalidates_specialist_cache(tmp
     assert len(calls) == 2
 
 
-def test_task_budget_also_stops_assessor_supplement(tmp_path):
+def test_segment_count_does_not_stop_assessor_supplement(tmp_path):
     from agentic_rag.config import settings
     database = ResearchStore(tmp_path / "research.sqlite")
     for i in range(settings.research_max_tasks):
         database.submit("r", str(i), "reader", {}, [], settings.research_max_tasks)
     with patch.object(service, "store", return_value=database):
-        assert not nodes._can_supplement({"run_id": "r", "reading_recipe": "recipe", "retries": 0})
+        assert nodes._can_supplement({"run_id": "r", "reading_recipe": "recipe", "retries": 0})
+        assert not nodes._can_supplement({"run_id": "r", "reading_recipe": "recipe", "retries": settings.research_max_rounds})
 
 
 def test_final_cache_includes_actual_model_revision():

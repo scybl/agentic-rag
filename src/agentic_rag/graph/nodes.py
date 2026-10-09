@@ -9,6 +9,7 @@ import json
 import re
 import queue
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from contextvars import copy_context
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -20,14 +21,15 @@ from pydantic import ValidationError
 
 from ..analysis_cache import AnalysisCache, build_cache_key, evidence_identity
 from ..config import settings
-from ..evidence import deduplicate, document_key, excerpt, format_evidence
+from ..evidence import deduplicate, document_key, excerpt, format_evidence, normalize_answer_references
 from ..evidence_audit import build_concerns, enforce_concern_checks
+from ..research_contract import parse_contract, apply_contract, completion_violations, selection_appendix
 from ..news_plan import clean_queries, news_metadata_matches, prepare_news_plan, source_matches
 from ..tools import (SOURCE_TOOLS, plan_tool_usage, read_news, validate_probability_answer,
                      validate_probability_evidence)
 from ..tools.contracts import ToolContext
 from ..tools.execution import execute_tool
-from ..tools.guardrails import infer_estimate_kind
+from ..tools.guardrails import infer_estimate_kind, is_probability_evidence_question
 from .chains import (
     DocumentAssessment,
     ModelOutputValidationError,
@@ -40,13 +42,18 @@ from .chains import (
 from .state import GraphState
 
 logger = logging.getLogger(__name__)
-ANALYSIS_PROMPT_VERSION = "research-v7-adaptive-model-feedback"
-GRADE_VERSION = "grade-v4-scoped-structured"
+ANALYSIS_PROMPT_VERSION = "research-v17-bounded-delivery"
+GRADE_VERSION = "grade-v5-evidence-sufficiency"
 
 
-def _select_answer_documents(documents: list[Document]) -> list[Document]:
+def _select_answer_documents(documents: list[Document], contract=None) -> list[Document]:
     """按来源轮流选择证据，避免某一个来源占满模型上下文。"""
     limit = max(1, settings.generation_max_documents)
+    if contract:
+        news = [d for d in documents if d.metadata.get("source_type") == "news_api"]
+        news.sort(key=lambda d: d.metadata.get("impact", {}).get("rank", 100000))
+        extras = [d for d in documents if d.metadata.get("source_type") != "news_api"]
+        return news[:contract["selection_limit"]] + _select_answer_documents(extras)[:4]
     groups: dict[str, list[Document]] = {}
     for document in documents:
         source_type = str(document.metadata.get("source_type") or "unknown")
@@ -71,7 +78,10 @@ def _select_answer_documents(documents: list[Document]) -> list[Document]:
 
 
 def _format_docs(documents: list[Document], query: str = "") -> str:
-    return format_evidence(documents, query, max(400, settings.generation_context_chars))
+    # 每篇保留完整的事实块；较大批量允许更多输入，但仍预留生成与系统提示词空间。
+    budget = min(max(400, settings.generation_context_chars, len(documents) * 550),
+                 max(400, settings.llm_context_window - min(5000, settings.llm_max_output_tokens) - 2500))
+    return format_evidence(documents, query, budget)
 
 
 # --------------------------------------------------------------------------
@@ -79,6 +89,7 @@ def _format_docs(documents: list[Document], query: str = "") -> str:
 # --------------------------------------------------------------------------
 def route(state: GraphState) -> GraphState:
     """规划本轮需要联合查询的来源，以及每个来源使用的查询。"""
+    contract = parse_contract(state.get("original_question", state["question"]))
     result = get_router().invoke({
         "question": state["question"],
         "original_question": state.get("original_question", state["question"]),
@@ -110,6 +121,8 @@ def route(state: GraphState) -> GraphState:
             selected_sources.append("news_api")
             source_queries["news_api"] = "FedWatch / 联邦基金期货"
     news_plan = {}
+    if contract and not result.use_news:
+        raise ValueError("用户明确要求新闻集合，但模型未规划新闻数据源；拒绝悄悄降级为普通问答。")
     if "news_api" in selected_sources:
         if result.use_news:
             news_plan = prepare_news_plan(
@@ -128,6 +141,7 @@ def route(state: GraphState) -> GraphState:
                 "mode": "unrestricted", "start": "", "end": "",
                 "reason": "概率任务需要带正文的市场定价资料",
             }, additional_queries=["联邦基金期货"])
+        news_plan = apply_contract(news_plan, contract)
         source_queries["news_api"] = " / ".join(news_plan["queries"])
     # 私有新闻库可以按来源硬过滤，但不能保证收录任意外部媒体；显式外部来源同时走公开检索。
     external_news_sources = [name for name in news_plan.get("source_names", [])
@@ -145,6 +159,8 @@ def route(state: GraphState) -> GraphState:
     ):
         evidence_needs.append("直接概率数据，或市场/统计输入及可复核的计算方法")
     task_type = "forecast" if estimate_kind == "probability" else result.task_type
+    if is_probability_evidence_question(question):
+        task_type = "factual"
     tool_plan = plan_tool_usage(
         selected_sources=selected_sources, estimate_kind=estimate_kind,
         research=bool(state.get("reading_recipe")),
@@ -156,6 +172,7 @@ def route(state: GraphState) -> GraphState:
         "source_queries": source_queries,
         "plan_summary": result.plan_summary.strip(),
         "news_search_plan": news_plan,
+        "task_contract": contract,
         "task_type": task_type,
         "estimate_kind": estimate_kind,
         "target_event": getattr(result, "target_event", "") or (
@@ -358,6 +375,8 @@ def news_api(state: GraphState) -> GraphState:
         "section": plan["section"], "sort_by": plan.get("sort_by", "relevance"),
         "coverage": plan.get("coverage", "focused"),
         "result_limit": plan.get("result_limit", settings.news_retrieval_k),
+        "candidate_limit": plan.get("candidate_limit", 0),
+        "ranking_mode": plan.get("ranking_mode", "relevance"),
     }, state)
 
 
@@ -400,7 +419,7 @@ def collect_sources(state: GraphState) -> GraphState:
     pool = ThreadPoolExecutor(max_workers=max(1, min(settings.io_concurrency, 3)))
     fetched = {}
     try:
-        active = {pool.submit(fetch, source): source for source in state["selected_sources"]}
+        active = {pool.submit(copy_context().run, fetch, source): source for source in state["selected_sources"]}
         while active:
             done, _ = wait(active, timeout=0.2, return_when=FIRST_COMPLETED)
             while not events.empty():
@@ -424,6 +443,9 @@ def collect_sources(state: GraphState) -> GraphState:
         all_documents.extend(documents)
     live_ids = {d.metadata.get("article_id") for d in all_documents if d.metadata.get("article_id")}
     for document in state.get("memory_documents", []):
+        if state.get("task_contract"):
+            # 指定集合之外的历史记忆不能混进最新 N 篇；同一文章的阅读缓存仍由版本精确复用。
+            continue
         if (document.metadata.get("article_id") not in live_ids
                 and news_metadata_matches(document.metadata, state.get("news_search_plan", {}))):
             all_documents.append(document)
@@ -460,14 +482,12 @@ def _pending_queries(state: GraphState, review: dict) -> tuple[list[str], list[s
 
 
 def _can_supplement(state: GraphState) -> bool:
+    if state.get("task_contract"):
+        return False
     research = bool(state.get("reading_recipe"))
     limit = settings.research_max_rounds if research else settings.max_retries
     if state.get("retries", 0) >= limit or state.get("no_progress_rounds", 0) >= 2:
         return False
-    if research:
-        from ..research.service import store
-        if len(store().tasks(state["run_id"])) >= settings.research_max_tasks:
-            return False
     return True
 
 
@@ -528,7 +548,12 @@ def _targeted_probability_reread(state: GraphState, question: str, documents: li
 
 def assess_evidence(state: GraphState) -> GraphState:
     """先检查整批资料是否足以推断，再决定补搜或分析。"""
-    documents = _select_answer_documents(state["documents"])
+    documents = _select_answer_documents(state["documents"], state.get("task_contract"))
+    execution_errors = completion_violations({**state, "answer_documents": documents}, final=False)
+    if execution_errors:
+        return {"answer_documents": documents, "evidence_context": "",
+                "execution_violations": execution_errors, "next_action": "generate",
+                "evidence_assessment": {"ready": False, "concerns": [], "missing_factors": execution_errors}}
     question = state.get("original_question", state["question"])
     contract = None
     if state.get("estimate_kind") == "probability":
@@ -543,6 +568,10 @@ def assess_evidence(state: GraphState) -> GraphState:
                     state, question, documents, reason="原文回读后重新检查概率证据契约",
                 )
     context = _format_docs(documents, question + " " + " ".join(state.get("evidence_needs", [])))
+    if state.get("task_contract") and "完整事实块超过上下文预算" in context:
+        errors = completion_violations({**state, "answer_documents": documents, "evidence_context": context}, final=False)
+        return {"answer_documents": documents, "evidence_context": context, "execution_violations": errors,
+                "next_action": "generate", "evidence_assessment": {"ready": False, "concerns": [], "missing_factors": errors}}
     news_coverage = [{key: event.get(key) for key in (
         "candidate_count", "selected_count", "deferred_count", "retrieval_complete", "ranking_method"
     )} for event in state.get("news_trace", []) if event.get("kind") == "news_ranked"]
@@ -562,8 +591,59 @@ def assess_evidence(state: GraphState) -> GraphState:
     }, config=_model_validation_config(state)).model_dump()
     valid_ids = {f"E{i}" for i in range(1, len(documents) + 1)}
     review["usable_evidence_ids"] = [eid for eid in review["usable_evidence_ids"] if eid in valid_ids]
-    review["concerns"] = build_concerns(review.get("concerns", []), documents,
+    # 评审编号基于完整候选，过滤之后必须统一重编，不能让 E2 错指旧 E2。
+    admitted = set(review["usable_evidence_ids"])
+    # 不增加检索日期窗口；仅阻止无可核日期的资料被当作近期事实。
+    undated = set()
+    if state.get("task_type", "factual") == "factual" and re.search(r"最近|近期|最新|今天|昨日|昨天|过去\s*\d+\s*(?:天|小时)", question):
+        for i, doc in enumerate(documents, 1):
+            if doc.metadata.get("source_type") not in {"web_search", "news_api"}:
+                continue
+            published = doc.metadata.get("published_at")
+            try:
+                if not published:
+                    raise ValueError("无日期")
+                datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+            except ValueError:
+                undated.add(f"E{i}")
+        admitted -= undated
+    id_map = {f"E{i}": f"E{j}" for j, (i, _doc) in enumerate(
+        ((i, doc) for i, doc in enumerate(documents, 1) if f"E{i}" in admitted), 1)}
+    audit = {"kind": "evidence_admission", "before": len(documents), "after": len(id_map),
+             "id_map": id_map, "excluded_ids": sorted(valid_ids - admitted),
+             "undated_current_evidence": sorted(undated), "assessment_before": json.loads(json.dumps(review))}
+    _source_writer(state)(audit)
+    if state.get("run_id") and state.get("reading_recipe"):
+        from ..research.service import store
+        store().event(state["run_id"], audit)
+    documents = [doc for i, doc in enumerate(documents, 1) if f"E{i}" in admitted]
+    reference_pattern = r"(?<![A-Za-z0-9])E\d+(?!\d)"
+    def remap(text):
+        return re.sub(reference_pattern, lambda m: id_map.get(m[0], "已排除材料"), text)
+    concerns = []
+    for concern in review.get("concerns", []):
+        ids = concern.get("evidence_ids", [])
+        mentioned = set(ids) | set(re.findall(reference_pattern, concern["detail"]))
+        if mentioned - admitted or (admitted != valid_ids and not mentioned):
+            continue
+        concerns.append({**concern, "evidence_ids": [id_map[eid] for eid in ids if eid in id_map],
+                         "detail": remap(concern["detail"])})
+    review["usable_evidence_ids"] = list(id_map.values())
+    review["covered_factors"] = [remap(value) for value in review.get("covered_factors", [])
+        if (set(re.findall(reference_pattern, value)) and set(re.findall(reference_pattern, value)).issubset(admitted))
+        or (admitted == valid_ids and not re.findall(reference_pattern, value))]
+    if admitted != valid_ids:
+        # 混合摘要无法可靠逐句剥离未准入事实；重置，不让删掉的证据绕道进入生成器。
+        review["summary"] = f"仅保留{len(admitted)}条准入证据；其余材料及混合检查摘要不作为回答依据。"
+        review["missing_factors"] = [] if review["ready"] and admitted else ["当前准入材料不足，需要补充可核对来源。"]
+    else:
+        review["summary"] = remap(review.get("summary", ""))
+    review["concerns"] = build_concerns(concerns, documents,
         task_type=state.get("task_type", "factual"), question=question)
+    # 下游专题、生成、核验只接纳实际可用材料。排除的原文保留在 documents/检查点供审计。
+    context = _format_docs(documents, question + " " + " ".join(state.get("evidence_needs", [])))
+    if contract is not None and admitted != valid_ids:
+        contract = _check_probability_evidence(state, question, documents, reason="按实际准入证据重新核对概率契约")
     review["source_errors"] = state.get("source_errors", {})
     review["news_retrieval"] = news_coverage
     if not review["usable_evidence_ids"]:
@@ -589,6 +669,7 @@ def assess_evidence(state: GraphState) -> GraphState:
     can_search = _can_supplement(state) and bool(news or web)
     return {
         "evidence_assessment": review, "answer_documents": documents,
+        "execution_violations": [],
         "evidence_context": context,
         "pending_news_queries": news, "pending_web_queries": web,
         "next_action": "supplement" if not review["ready"] and can_search else "generate",
@@ -658,9 +739,34 @@ def _analysis_version(state, context):
                           + str(state.get("model_revision", "")) + str(settings.llm_reasoning))
 
 
+def _checked_specialist_advice(state, documents, context):
+    """专题建议不是新证据：去掉价格/时间检查失败的句子，原始成果仍保留供审计。"""
+    from ..evidence import audit_numeric_claims, audit_policy_claims
+    findings = []
+    for finding in state.get("specialist_findings", []):
+        accepted, rejected = [], []
+        for sentence in re.split(r"(?<=[。！？])", finding.get("summary", "")):
+            errors = audit_numeric_claims(sentence, documents, context) + audit_policy_claims(sentence, context)
+            if errors:
+                rejected.extend(errors)
+            else:
+                accepted.append(sentence)
+        findings.append({"goal": finding.get("goal"), "summary": "".join(accepted),
+            "evidence_ids": finding.get("evidence_ids", []),
+            "limitations": [*finding.get("limitations", []),
+                *(["本专题部分句子未通过数字/事件时间校验，已移除；只使用留下的建议与原始E证据。"] if rejected else [])]})
+        if rejected:
+            _source_writer(state)({"kind": "research", "event": "specialist_advice_filtered",
+                "goal": finding.get("goal", ""), "reason": "；".join(dict.fromkeys(rejected))})
+    return findings
+
+
 def generate(state: GraphState) -> GraphState:
     question = state.get("original_question", state["question"])
-    answer_documents = state.get("answer_documents", _select_answer_documents(state["documents"]))
+    answer_documents = state.get("answer_documents", _select_answer_documents(state["documents"], state.get("task_contract")))
+    if state.get("execution_violations"):
+        return {"generation": "交付约束未满足，停止生成预测。", "answer_documents": answer_documents,
+                "analysis_cache_hit": False}
     context = state.get("evidence_context") or _format_docs(answer_documents, question)
     cache_key, _, _ = build_cache_key(
         question,
@@ -690,14 +796,15 @@ def generate(state: GraphState) -> GraphState:
             "forecast_horizon": state.get("forecast_horizon", ""),
             "current_date": datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat(),
             "evidence_assessment": json.dumps(state.get("evidence_assessment", {}), ensure_ascii=False),
-            "revision_feedback": state.get("revision_feedback", "首次回答"),
+            "revision_feedback": state.get("revision_feedback", "首次回答") + (
+                "\n交付要求：程序会附上逐篇新闻分析清单，正文只写核心综合判断，不重复清单。" if state.get("task_contract") else "")
+                + "\n发布时间不等于事件时间。必须保留事件背景；没有量化估值模型时，只做方向和条件预测，不给目标价格或价格区间。机构价格区间不是本研究的估值，不能贴上情景目标标签。先给基准判断，再给上行和下行情景。C编号仅供内部检查，最终引用只用E编号。同一事件的多篇报道不等于多份独立影响，不能重复累加。",
             # 原文回读已合并到有预算的证据上下文；不要在建议区重复塞入全部原文。
-            "specialist_findings": json.dumps([{k: f.get(k) for k in ("goal", "summary", "evidence_ids", "limitations")}
-                                                for f in state.get("specialist_findings", [])], ensure_ascii=False),
+            "specialist_findings": json.dumps(_checked_specialist_advice(state, answer_documents, context), ensure_ascii=False),
         }, config=_model_validation_config(state)
     )
     return {
-        "generation": generation,
+        "generation": normalize_answer_references(generation),
         "answer_documents": answer_documents,
         "analysis_cache_key": cache_key,
         "analysis_cache_hit": False,
@@ -730,6 +837,15 @@ def _is_unnecessary_forecast_refusal(state: GraphState) -> bool:
 def evaluate_generation(state: GraphState) -> GraphState:
     """同时检查事实与任务完成情况，区分补证据和重写答案。"""
     answer_documents = state.get("answer_documents", state["documents"])
+    execution_errors = completion_violations(state)
+    if execution_errors:
+        # 文本重写无法补做漏掉的阅读/专题任务；不消耗模型反复为失败结果辩护。
+        return {"generation_complete": False, "generation_grounded": False,
+                "execution_violations": execution_errors, "next_action": "finish",
+                "generation_check": "；".join(execution_errors),
+                "answer_review": {"decision": "incomplete", "issues": execution_errors},
+                "generation": "本次研究未完成交付要求，未将预测作为已核验结论输出。\n" + "；".join(execution_errors)
+                              + selection_appendix(state)}
     context = state.get("evidence_context") or _format_docs(answer_documents, state["question"])
     if not state.get("generation", "").strip():
         review = {
@@ -774,6 +890,21 @@ def evaluate_generation(state: GraphState) -> GraphState:
             review["grounded"] = False
             review["issues"].append("预测中的事实需要使用 [E编号] 引用")
     enforce_concern_checks(review, state.get("evidence_assessment", {}).get("concerns", []))
+    from ..evidence import audit_numeric_claims, audit_policy_claims, audit_forecast_status, audit_growth_claims, audit_indicator_periods
+    evidence_errors = audit_numeric_claims(state.get("generation", ""), answer_documents, context,
+                                         forecast=state.get("task_type") == "forecast")
+    evidence_errors.extend(audit_policy_claims(state.get("generation", ""), context))
+    evidence_errors.extend(audit_forecast_status(state.get("generation", ""), answer_documents))
+    evidence_errors.extend(audit_growth_claims(state.get("generation", "")))
+    evidence_errors.extend(audit_indicator_periods(state.get("generation", ""), context))
+    if re.search(r"\[[^\]\n]*\bC\d+\b[^\]\n]*\]", state.get("generation", "")):
+        evidence_errors.append("C编号是内部核对项，不是新闻证据；在正文说明限制，不把C编号当来源引用。")
+    if state.get("task_contract") and state.get("task_type") == "forecast" and not re.search(r"基准(?:情景|判断|预测)", state.get("generation", "")):
+        evidence_errors.append("缺少基准判断：不能只并列两份相反的机构预测；根据现有驱动给出低置信度的基准方向及上行/下行触发条件，不编价格目标。")
+    if evidence_errors:
+        review.update(decision="revise", grounded=False, answers_question=False, needs_more_evidence=False)
+        review["issues"].extend(evidence_errors)
+        review["revision_instructions"] += "；" + "；".join(evidence_errors)
     if state.get("estimate_kind") == "probability" and state.get("generation", "").strip():
         evidence_contract = state.get("evidence_assessment", {}).get("probability_contract", {})
         contract = execute_tool(validate_probability_answer, {
@@ -810,6 +941,8 @@ def evaluate_generation(state: GraphState) -> GraphState:
         "next_action": "finish",
     }
     if passed:
+        if state.get("task_contract"):
+            update["generation"] = state["generation"] + selection_appendix(state)
         cache_key = state.get("analysis_cache_key")
         if settings.analysis_cache_enabled and cache_key and answer_documents:
             evidence_hash, source_ids = evidence_identity(answer_documents)

@@ -1,0 +1,19 @@
+# 2026-10-02 Windows / Python 3.12.14 验收所用主要依赖。
+# 这是主要依赖约束，不是全部传递依赖的锁文件，也不代表跨平台均已验证。
+langgraph==1.2.12
+langgraph-checkpoint-sqlite==3.1.1
+langchain-core==1.6.5
+langchain-community==0.3.31
+langchain-text-splitters==1.1.2
+langchain-ollama==1.1.0
+ollama==0.6.3
+httpx==0.28.1
+langchain-huggingface==1.2.2
+langchain-chroma==1.1.0
+sentence-transformers==6.1.0
+scikit-learn==1.9.1
+ddgs==9.16.0
+pypdf==6.19.0
+python-dotenv==1.2.3
+pydantic==2.13.5
+pytest==9.1.1

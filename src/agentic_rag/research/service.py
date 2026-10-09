@@ -15,7 +15,7 @@ from ..config import settings
 from ..ollama_connection import ollama_client_kwargs
 from .chains import specialist, validate_reading, read_segment
 from .memory import MemoryIndex
-from .scheduler import Scheduler, TaskSpec
+from .scheduler import Scheduler, TaskSpec, ResearchWorkPending
 from .store import ResearchStore, fingerprint
 from .runtime import task_context
 from ..evidence import format_evidence
@@ -24,9 +24,9 @@ from ..tools.contracts import ToolContext
 from ..tools.execution import execute_tool
 
 
-READING_VERSION = "reader-v6-adaptive-model-feedback"
-SPECIALIST_VERSION = "specialist-v8-adaptive-model-feedback"
-WORKFLOW_VERSION = "research-workflow-v10-full-news-candidates"
+READING_VERSION = "reader-v10-verbatim-source"
+SPECIALIST_VERSION = "specialist-v10-current-date"
+WORKFLOW_VERSION = "research-workflow-v22-abstract-first"
 
 
 def store():
@@ -54,7 +54,7 @@ def model_revision():
 
 
 def recipe(signature):
-    return fingerprint([READING_VERSION, signature, settings.reading_chunk_chars])
+    return fingerprint([READING_VERSION, signature, settings.reading_chunk_chars, settings.reading_verbatim_max_chars])
 
 
 def initialize(state):
@@ -102,7 +102,8 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
             document.metadata["memory_origin"] = True
         article = database.register(document, settings.reading_chunk_chars)
         for chunk in article["chunks"]:
-            chunk["task_key"] = fingerprint(["read", article["id"], article["header"], chunk["hash"], reading_recipe])
+            chunk["task_key"] = fingerprint(["read", article["id"], article["header"], chunk["hash"], reading_recipe,
+                                             len(article["body"]) <= settings.reading_verbatim_max_chars])
         saved = database.reading(article["version"], reading_recipe)
         materials.append((document, article, saved))
         if saved and saved["status"] == "complete":
@@ -113,16 +114,35 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
         for chunk in article["chunks"]:
             key = chunk["task_key"]
             specs.append(TaskSpec(key, "reader", {"goal": f"阅读《{document.metadata.get('title', '')}》第 {chunk['ordinal'] + 1}/{len(article['chunks'])} 段，提取有出处的事实与观点",
-                "header": article["header"], "text": chunk["body"]}))
+                "header": article["header"], "text": chunk["body"],
+                "verbatim": len(article["body"]) <= settings.reading_verbatim_max_chars}))
 
     def handle(payload):
         if read_fn:
             return validate_reading(read_fn(payload), payload["text"])
         ctx = task_context.get()
+        if payload.get("verbatim"):
+            if ctx:
+                ctx["emit"]("verbatim_read", {"characters": len(payload["text"]), "model_calls": 0})
+            return validate_reading({"claims": [{"kind": "source_excerpt", "statement": payload["text"],
+                "quote": payload["text"]}], "limitations": ["短原文直接保留，未调用阅读模型、未做独立事实核实；事实分类由后续检查完成。"]}, payload["text"])
         on_split = (lambda sizes: ctx["emit"]("reading_split", {"characters": sizes})) if ctx else None
         return read_segment(payload, on_split=on_split)
 
-    results = Scheduler(database, run_id, emit=emit).run(specs, {"reader": handle}) if specs else {}
+    reserve = min(3, settings.specialist_count) if state.get("task_type") != "factual" else 0
+    existing = database.tasks(run_id)
+    known = {t["key"] for t in existing}
+    required = len(existing) + len({s.key for s in specs} - known) + reserve
+    # 文章数量在检索端控制；不能因为文章长、分段多就少读原文。
+    # 保留 task_budget 字段供旧记录展示，但它现在是需求计数，不再截断阅读队列。
+    budget = required
+    event = {"kind": "research", "event": "budget_plan", "required": required,
+             "allowed": None, "reserved_specialists": reserve,
+             "articles": sum(article is not None for _, article, _ in materials),
+             "workers": settings.agent_workers}
+    database.event(run_id, event)
+    emit(event)
+    results = Scheduler(database, run_id, limit_tasks=False, emit=emit).run(specs, {"reader": handle}) if specs else {}
     documents, reports = [], []
     for document, article, saved in materials:
         if article is None:
@@ -133,7 +153,7 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
             saved = database.save_reading(article, reading_recipe, completed)
         lines = []
         for claim in saved["claims"]:
-            lines.append(f"类型：{claim['kind']}；提取：{claim['statement']}\n原文位置：{claim['start']}–{claim['end']}；原文：{claim['quote']}")
+            lines.append(f"类型：{claim['kind']}；事件背景：{claim.get('event_context', '原文未明确，不得用发布时间代替')}；提取：{claim['statement']}\n原文位置：{claim['start']}–{claim['end']}；原文：{claim['quote']}")
         task_keys = saved.get("task_keys") or [c["task_key"] for c in article["chunks"]
                     if (database.task(c["task_key"]) or {}).get("status") == "complete"]
         report = {"title": document.metadata.get("title", ""), "status": saved["status"], "covered": saved["covered"], "total": saved["total"],
@@ -146,20 +166,32 @@ def read_documents(state, *, database=None, read_fn=None, index=None):
         if not lines:
             body += "\n未获得可验证的阅读事实。原始材料片段：\n" + document.page_content[:1000]
         documents.append(Document(page_content=body, metadata={**document.metadata, "memory_version": article["version"],
-                         "reading_id": saved["id"], "reading_status": saved["status"], "content_hash": fingerprint([article["version"], body])}))
+                         "reading_id": saved["id"], "reading_status": saved["status"],
+                         "reading_claims": saved["claims"], "source_text": article["body"],
+                         "content_hash": fingerprint([article["version"], body])}))
     sync = (index or MemoryIndex(database)).flush()
     emit({"kind": "research", "event": "index_sync", **sync})
+    partial = [report for report in reports if report["status"] != "complete"]
+    if partial:
+        event = {"kind": "research", "event": "reading_pending", "reports": reports,
+                 "covered": sum(r["covered"] for r in reports), "total": sum(r["total"] for r in reports)}
+        database.event(run_id, event)
+        emit(event)
+        raise ResearchWorkPending(f"仍有 {len(partial)} 篇文章未读完（{event['covered']}/{event['total']} 段）；"
+                                  "队列和已完成成果已保存，请恢复此研究；失败任务需 --retry-failed。")
     signature = fingerprint(sorted((str(d.metadata.get("source", "")), str(d.metadata.get("memory_version") or fingerprint(d.page_content))) for d in documents))
     unchanged = state.get("evidence_signature") == signature and state.get("retries", 0) > 0
-    return {"documents": documents, "research_documents": [material[0] for material in materials],
+    return {"documents": documents, "task_budget": budget, "research_documents": [material[0] for material in materials],
             "reading_reports": reports, "evidence_signature": signature,
             "no_progress_rounds": state.get("no_progress_rounds", 0) + 1 if unchanged else 0}
 
 
 def dispatch_specialists(state, *, database=None, analyze_fn=None, index=None):
+    if state.get("execution_violations"):
+        return {"specialist_findings": [], "specialist_execution": {"expected": 0, "completed": 0}, "next_action": "generate"}
     database = database or store()
     context = state.get("evidence_context", "")
-    needs = state.get("evidence_needs", [])[:settings.specialist_count]
+    needs = state.get("evidence_needs", [])[:min(3, settings.specialist_count)]
     if state.get("task_type") == "factual" or not state.get("answer_documents"):
         return {"specialist_findings": [], "next_action": "generate"}
     if not needs:
@@ -212,10 +244,13 @@ def dispatch_specialists(state, *, database=None, analyze_fn=None, index=None):
                          "kind": "conditional_analysis", "source_run": state["run_id"]}}
         return result
 
-    results = Scheduler(database, state["run_id"], emit=writer()).run(specs, {"specialist": handle})
+    results = Scheduler(database, state["run_id"], limit_tasks=False, emit=writer()).run(specs, {"specialist": handle})
     findings = [results[spec.key] for spec in specs if results.get(spec.key)]
     sync = (index or MemoryIndex(database)).flush()
     writer()({"kind": "research", "event": "index_sync", **sync})
+    if len(findings) != len(specs):
+        raise ResearchWorkPending(f"专题任务仅完成 {len(findings)}/{len(specs)}；已完成成果已保存，"
+                                  "请恢复此研究，失败任务需 --retry-failed。")
     from ..graph.nodes import _pending_queries
     gaps = {"news_queries": [], "web_queries": []}
     for finding in findings:
@@ -232,13 +267,29 @@ def dispatch_specialists(state, *, database=None, analyze_fn=None, index=None):
                       "reason": "未来预测数值不是必需的已发生事实，保留为不确定性，不因缺少它反复补搜"})
     news, web = _pending_queries(state, gaps)
     can_search = state.get("retries", 0) < settings.research_max_rounds and (news or web)
-    # 任务预算耗尽不继续派一轮注定无法阅读的新材料。
-    can_search = can_search and len(database.tasks(state["run_id"])) < settings.research_max_tasks
+    # 补搜由轮次、无进展检测和全局时间/模型调用预算控制，不再被阅读分段数阻断。
+    can_search = can_search and not state.get("task_contract")  # 不把补搜资料混入用户限定的母集。
     can_search = can_search and state.get("no_progress_rounds", 0) < 2
     passages = list({fingerprint(p): p for f in findings for p in f.get("reread_passages", [])}.values())
     if passages:
-        extra = "\n".join(f"[{p['evidence_id']}] 原文回读 {p['start']}–{p['end']}：{p['quote']}" for p in passages)[:settings.generation_context_chars // 3]
-        context = format_evidence(state["answer_documents"], state["question"], settings.generation_context_chars - len(extra) - 30)
-        context += "\n补充的原文证据：\n" + extra
-    return {"specialist_findings": findings, "evidence_context": context, "pending_news_queries": news, "pending_web_queries": web,
+        budget = min(max(400, settings.generation_context_chars, len(state["answer_documents"]) * 550),
+                     max(400, settings.llm_context_window - min(5000, settings.llm_max_output_tokens) - 2500))
+        blocks = [f"[{p['evidence_id']}] 原文回读 {p['start']}–{p['end']}：{p['quote']}" for p in passages]
+        # 优先保住每篇已有事实；只按完整回读块追加，不截断句子也不把批量上下文缩回默认值。
+        base = format_evidence(state["answer_documents"], state["question"], budget)
+        selected = []
+        for block in blocks:
+            extra = "\n".join([*selected, block])
+            if len(extra) > budget // 3:
+                continue
+            candidate = format_evidence(state["answer_documents"], state["question"], budget - len(extra) - 30)
+            if "完整事实块超过上下文预算" not in candidate:
+                selected.append(block)
+                base = candidate
+        context = base + ("\n补充的原文证据：\n" + "\n".join(selected) if selected else "")
+        if len(selected) < len(blocks):
+            writer()({"kind": "research", "event": "reread_context_limit", "included": len(selected),
+                      "total": len(blocks), "reason": "保持全部入选文章的完整事实；其余回读保存在专题成果，未进入最终上下文"})
+    return {"specialist_findings": findings, "specialist_execution": {"expected": len(specs), "completed": len(findings)},
+            "evidence_context": context, "pending_news_queries": news, "pending_web_queries": web,
             "next_action": "supplement" if can_search else "generate"}

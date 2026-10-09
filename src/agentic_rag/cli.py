@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import queue
+import sqlite3
 import sys
 import threading
 import time
@@ -13,7 +14,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-from ollama import Client, ResponseError
+import httpx
+from ollama import Client
 
 # 关闭模型库进度条，让终端聚焦于智能体步骤。必须在加载嵌入模型前设置。
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
@@ -22,10 +24,10 @@ os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 from .config import settings
 from .graph.build import build_graph
 from .ingestion import start_knowledge_watcher
-from .ollama_connection import ollama_client_kwargs
+from .ollama_connection import ollama_client_kwargs, warmup_failure
 from .token_usage import UsageLedger, active_usage, usage_session, print_usage_event, print_compact_usage_event, print_usage_summary, format_duration
 from .console import CompactTrace
-from .research.inspection import has_pending_work, inspect_research, print_inspection
+from .research.inspection import has_pending_work, recoverable_reading, inspect_research, print_inspection
 
 
 SOURCE_LABELS = {
@@ -91,13 +93,23 @@ def warm_up_model(*, client: Client | None = None, sleep_fn=time.sleep, session_
 
 
 def _warm_up_model(*, client, sleep_fn, ledger):
-    ollama_client = client or Client(
-        host=settings.ollama_base_url,
-        **ollama_client_kwargs(settings.ollama_base_url),
-    )
+    if client is None:
+        # SDK 默认 timeout=None 会无限等待；连接与加载采用不同的超时上限。
+        timeout = max(1, settings.llm_request_timeout)
+        try:
+            owned_client = Client(host=settings.ollama_base_url,
+                                  timeout=httpx.Timeout(timeout, connect=min(5.0, timeout)),
+                                  **ollama_client_kwargs(settings.ollama_base_url))
+        except Exception as exc:
+            _, reason = warmup_failure(exc, settings.ollama_base_url)
+            print(f"模型预热初始化失败：{reason}", flush=True)
+            return False
+        with owned_client as opened_client:
+            return _warm_up_model(client=opened_client, sleep_fn=sleep_fn, ledger=ledger)
+    ollama_client = client
     attempts = max(1, settings.ollama_warmup_attempts)
     started = time.perf_counter()
-    print(f"正在加载本地模型 {settings.llm_model}，首次可能需要几十秒……", flush=True)
+    print(f"正在连接 Ollama 并请求预热模型 {settings.llm_model}，首次加载可能需要几十秒……", flush=True)
     for attempt in range(1, attempts + 1):
         attempt_started = time.perf_counter()
         call_id = ledger.begin_call(step={"step": "warmup", "step_id": "warmup"},
@@ -116,19 +128,16 @@ def _warm_up_model(*, client, sleep_fn, ledger):
             elapsed = time.perf_counter() - started
             print(f"模型已就绪（{elapsed:.1f} 秒）", flush=True)
             return True
-        except ResponseError as exc:
-            ledger.finish_call(call_id, failed=True, elapsed=round(time.perf_counter() - attempt_started, 3))
-            if getattr(exc, "status_code", None) != 503 or attempt >= attempts:
-                print(f"模型预热失败：{_run_error_message(exc)}", flush=True)
-                return False
         except Exception as exc:
             ledger.finish_call(call_id, failed=True, elapsed=round(time.perf_counter() - attempt_started, 3))
-            if attempt >= attempts:
-                print(f"模型预热失败：{_run_error_message(exc)}", flush=True)
+            retryable, reason = warmup_failure(exc, settings.ollama_base_url)
+            if not retryable or attempt >= attempts:
+                suffix = " 已达到预热尝试上限。" if retryable else ""
+                print(f"模型预热失败：{reason}{suffix}", flush=True)
                 return False
         delay = max(0.0, settings.ollama_warmup_retry_seconds)
         print(
-            f"模型暂未就绪，{delay:g} 秒后重试（{attempt + 1}/{attempts}）……",
+            f"预热暂时失败：{reason}\n{delay:g} 秒后重试（{attempt + 1}/{attempts}）……",
             flush=True,
         )
         sleep_fn(delay)
@@ -137,12 +146,12 @@ def _warm_up_model(*, client, sleep_fn, ledger):
 
 def unload_model(*, client: Client | None = None, verbose: bool = False) -> bool:
     """通知 Ollama 立即卸载当前模型；退出清理失败不能遮盖原任务结果。"""
-    ollama_client = client or Client(
-        host=settings.ollama_base_url,
-        **ollama_client_kwargs(settings.ollama_base_url),
-    )
     try:
-        ollama_client.generate(
+        if client is None:
+            with Client(host=settings.ollama_base_url, timeout=httpx.Timeout(5.0),
+                        **ollama_client_kwargs(settings.ollama_base_url)) as owned_client:
+                return unload_model(client=owned_client, verbose=verbose)
+        client.generate(
             model=settings.llm_model,
             prompt="",
             stream=False,
@@ -152,7 +161,7 @@ def unload_model(*, client: Client | None = None, verbose: bool = False) -> bool
         return True
     except Exception as exc:
         if verbose:
-            print(f"本地模型卸载失败：{type(exc).__name__}: {exc}", flush=True)
+            print(f"本地模型卸载通知失败：{type(exc).__name__}；可在 Ollama 中检查模型状态。", flush=True)
         return False
 
 
@@ -163,6 +172,7 @@ class TracePrinter:
         self.verbose = verbose
         self.round = 0
         self.compact = None if verbose else CompactTrace()
+        self.screen_trace = CompactTrace()
 
     @staticmethod
     def _heading(flow_step: str, title: str) -> None:
@@ -173,6 +183,8 @@ class TracePrinter:
         if self.compact is not None:
             return self.compact.show_event(event)
         kind = event.get("kind")
+        if kind in {"news_screen_progress", "news_screen_batch", "news_core_replaced", "news_core_ready"}:
+            return self.screen_trace.show_event(event)
         if kind == "document_grade":
             label = {"keep": "保留", "exclude": "排除", "uncertain": "待确认，暂存"}.get(event.get("decision"), "未知")
             print(f"  [精读前筛选 · {label}] {_display(event.get('title'))}")
@@ -214,6 +226,12 @@ class TracePrinter:
                 print(f"  [阅读复用] {event['title']}：{event['covered']}/{event['total']} 段，无需重新调用模型")
             elif name == "reading_split":
                 print(f"  [阅读缩段] 输出截断，保留思考并拆成两段：{event['characters']} 字符；最多拆一次，不原样重试")
+            elif name == "budget_plan":
+                print(f"  [任务计划] 需要 {event['required']} / 数量上限 {event['allowed'] or '不限'}；专题预留 {event['reserved_specialists']}；并发 {event.get('workers', '?')}")
+            elif name == "reread_context_limit":
+                print(f"  [回读上下文] 已纳入 {event['included']}/{event['total']} 块；{event['reason']}")
+            elif name == "specialist_advice_filtered":
+                print(f"  [专题建议校验] {event['goal']}；未采纳相关句子：{event['reason']}")
             elif name == "index_sync":
                 print(f"  [向量投影] 已同步 {event['synced']}；失败 {event['failed']}；待同步 {event['remaining']}（失败不丢阅读成果）")
             elif name == "search_skipped":
@@ -241,8 +259,14 @@ class TracePrinter:
             print(f"  本页上限：{event['limit']} 条；排序：{order}；续页：{'是' if event.get('continuation') else '否'}")
             if "max_items" in event:
                 print(f"  本组候选上限：{event['max_items'] if event['max_items'] is not None else '不限，持续取页直到结束'}")
+        elif kind == "news_retry":
+            print(f"  新闻临时错误 HTTP {event['status_code']}；{event['delay']} 秒后第 {event['attempt']}/{event['max_attempts']} 次尝试；q={event.get('query')!r}")
+            if event.get("request_id"):
+                print(f"  服务请求编号：{event['request_id']}；分类：{event.get('error_code') or '未标注'}")
         elif kind == "news_page":
             print(f"  第 {event['page']} 页返回：{event['count']} 条；还有下一页：{'是' if event['has_more'] else '否'}")
+            if event.get("request_id"):
+                print(f"  服务请求编号：{event['request_id']}")
         elif kind == "news_error":
             print(f"  新闻 API 请求失败：{_display(event['message'])}")
             if event.get("partial_count"):
@@ -256,6 +280,10 @@ class TracePrinter:
             print(f"  查询条件硬过滤：{event['input_count']} 条 → {event['matched_count']} 条")
             print(f"  精确时间：{event.get('published_after') or '不限'} ~ {event.get('published_before') or '不限'}")
             print(f"  信息源：{'、'.join(event.get('source_names', [])) or '不限'}；栏目：{event.get('section') or '不限'}")
+        elif kind == "impact_progress":
+            print(f"  [影响评分] {event['scored']}/{event['total']}；缓存复用 {event['cached']}")
+        elif kind == "news_scope_progress":
+            print(f"  [主题与影响筛选] 扫描 {event['scanned']}；相关 {event['accepted']}/{event['required']}；无关 {event['excluded']}")
         elif kind == "news_ranked":
             print(f"  匹配候选全部保留：{event['candidate_count']} 条；正文入选：{event['selected_count']} 条；暂未精读：{event.get('deferred_count', 0)} 条")
             if "raw_count" in event:
@@ -322,7 +350,11 @@ class TracePrinter:
             if plan:
                 if plan.get("raw_queries") and plan["raw_queries"] != plan.get("queries"):
                     print(f"  模型原始新闻词：{plan['raw_queries']}")
-                    print(f"  查询整理：拆分分号列表、去重，最多保留 4 组；实际执行：{plan['queries']}")
+                    print(f"  查询整理：拆分、去重和主题补全，最多 4 组；实际执行：{plan['queries']}")
+                if plan.get("added_topic_queries"):
+                    print(f"  主题补全查询：{plan['added_topic_queries']}")
+                if plan.get("deferred_topics"):
+                    print(f"  未单独检索主题：{plan['deferred_topics']}（本轮查询额度不足，未视为已覆盖）")
                 suggestion = plan.get("suggested_time", {})
                 mode = {"unrestricted": "不限时间", "suggested": "模型建议", "explicit": "用户指定"}.get(suggestion.get("mode"), "未提供")
                 print(f"  模型时间选择：{mode}")
@@ -421,11 +453,11 @@ class TracePrinter:
             print(f"  {label}/网络：{query}")
 
 
-def run_with_trace(graph, question: str, *, verbose: bool = False, run_id=None, resume=False) -> dict[str, Any]:
+def run_with_trace(graph, question: str, *, verbose: bool = False, run_id=None, resume=False, conversation_input=None) -> dict[str, Any]:
     """流式运行图并合并节点更新，返回与 graph.invoke 相同用途的最终状态。"""
-    state: dict[str, Any] = {"question": question}
+    state: dict[str, Any] = {**(conversation_input or {}), "question": question}
     trace = TracePrinter(verbose=verbose)
-    input_state = {"question": question}
+    input_state = dict(state)
     options = {}
     if run_id:
         config = {"configurable": {"thread_id": run_id}, "recursion_limit": 100}
@@ -437,9 +469,11 @@ def run_with_trace(graph, question: str, *, verbose: bool = False, run_id=None, 
                 raise ValueError("没有找到可恢复的检查点")
             state = dict(snapshot.values)
             if not has_pending_work(snapshot):
+                if recoverable_reading(snapshot):
+                    raise ValueError("此记录有未读完文章，需要由 --resume 入口恢复阅读队列，不能作为最终答案展示")
                 if not state.get("generation"):
                     raise ValueError("检查点没有最终答案，也没有可推进任务；不能判定为已完成")
-                print("  该研究已完成，展示保存的最终结果。")
+                print("  该研究已结束，展示保存的结果（完成状态以核验标记为准）。")
                 return state
             if state.get("model_revision"):
                 from .research.service import model_revision, recipe, WORKFLOW_VERSION
@@ -466,8 +500,11 @@ def run_with_trace(graph, question: str, *, verbose: bool = False, run_id=None, 
 
 def _run_error_message(exc: BaseException) -> str:
     """把常见的 Ollama 异常转换成可操作的终端提示。"""
+    from .news_api import NewsAPIError
     current: BaseException | None = exc
     while current is not None:
+        if isinstance(current, NewsAPIError):
+            return str(current)
         status_code = getattr(current, "status_code", None)
         if status_code == 503:
             return (
@@ -479,7 +516,7 @@ def _run_error_message(exc: BaseException) -> str:
             return "无法连接 Ollama。请确认 Ollama 正在运行，并检查 OLLAMA_BASE_URL。"
         if name == "EmptyModelOutputError":
             return "Ollama 多次返回空文本。本次结果不会缓存，请直接重试或换用较小模型。"
-        if name == "ModelOutputTruncatedError":
+        if name in {"ModelOutputTruncatedError", "ModelOutputValidationError", "ModelAdaptiveRetryError"}:
             return str(current)
         current = current.__cause__ or current.__context__
     return f"智能体执行失败：{type(exc).__name__}: {_clip(exc, 160)}"
@@ -498,8 +535,9 @@ def show_failure_context(database, run_id, exc, *, verbose=False):
         print(f"[诊断读取失败] {type(diagnostic_error).__name__}；原错误：{message}")
 
 
-def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=False, retry_failed=False, session_ledger=None) -> bool:
-    print(f"\n问题：{question}")
+def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=False, retry_failed=False, session_ledger=None, conversation_input=None, on_result=None) -> bool:
+    if not resume:
+        print(f"\n问题：{question}")
     database = None
     acquired = False
     ledger = UsageLedger(observer=session_ledger.observe if session_ledger else None)
@@ -515,19 +553,37 @@ def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=Fals
                     if not snapshot.values:
                         raise ValueError("没有找到可恢复的检查点")
                     question = snapshot.values.get("question", "")
-                    if snapshot.values.get("model_revision") and (has_pending_work(snapshot) or retry_failed):
+                    print(f"\n问题：{question}")
+                    repair_reading = recoverable_reading(snapshot)
+                    if snapshot.values.get("model_revision") and (has_pending_work(snapshot) or retry_failed or repair_reading):
                         from .research.service import model_revision, recipe, WORKFLOW_VERSION
                         if (snapshot.values["model_revision"] != model_revision()
                                 or snapshot.values.get("reading_recipe") != recipe(snapshot.values["model_revision"])
-                                or snapshot.values.get("workflow_revision") != WORKFLOW_VERSION):
+                                or (snapshot.values.get("workflow_revision") != WORKFLOW_VERSION and not repair_reading)):
                             raise ValueError("模型、配置或工作流版本已变化，请发起新研究；兼容的阅读成果仍可复用")
                 stack.enter_context(run_lease(database, run_id, question))
                 acquired = True
+                if resume and repair_reading:
+                    from .research.service import WORKFLOW_VERSION
+                    # 不重搜、不改原文、不清空已完成任务；仅重建缺失分段的队列。
+                    graph.update_state({"configurable": {"thread_id": run_id}}, {
+                        "documents": snapshot.values["research_documents"], "workflow_revision": WORKFLOW_VERSION,
+                        "execution_violations": [], "generation": "", "generation_complete": False,
+                        "generation_grounded": False, "specialist_findings": [], "specialist_execution": {},
+                    }, as_node="grade_documents")
+                    database.event(run_id, {"kind": "reading_recovery", "from": snapshot.values.get("workflow_revision"),
+                                           "to": WORKFLOW_VERSION, "reason": "重建旧流程遗漏的阅读任务；复用已有成果"})
+                    snapshot = graph.get_state({"configurable": {"thread_id": run_id}})
+                    print("已恢复未完成阅读：使用保存的原文，完成的分段直接复用。")
                 if retry_failed:
                     count = database.retry_failed(run_id)
                     if count:
+                        at_reading = "read_documents" in snapshot.next
                         graph.update_state({"configurable": {"thread_id": run_id}},
-                            {"documents": snapshot.values.get("research_documents", snapshot.values.get("documents", []))}, as_node="collect_sources")
+                            {"documents": snapshot.values.get("documents", []) if at_reading else
+                                snapshot.values.get("research_documents", snapshot.values.get("documents", []))},
+                            as_node="grade_documents" if at_reading else "collect_sources")
+                        snapshot = graph.get_state({"configurable": {"thread_id": run_id}})
                     print(f"已重置 {count} 个失败任务的重试预算")
                 database.run_status(run_id, "running")
                 print(f"  研究编号：{run_id}；中断后用 agentic-rag --resume {run_id} 恢复", flush=True)
@@ -536,7 +592,22 @@ def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=Fals
                                      historical_gap=resume and not history,
                                      observer=session_ledger.observe if session_ledger else None)
             stack.enter_context(usage_session(ledger))
-            result = run_with_trace(graph, question, verbose=verbose, run_id=run_id, resume=resume)
+            from .budget import research_budget
+            # 已完成历史仅展示，不受新的执行额度拦截；恢复按已计量执行时间累计，不算离线等待。
+            offline = resume and not has_pending_work(snapshot) and not retry_failed
+            if not offline:
+                stack.enter_context(research_budget(
+                    seconds=settings.research_total_timeout, calls=settings.research_max_model_calls,
+                    elapsed=sum(s.get("elapsed") or 0 for s in ledger.sessions.values()
+                                if s.get("event") == "session_finished"),
+                    used_calls=len(ledger.calls)))
+                print(f"  研究预算：累计执行 {settings.research_total_timeout or '不限'} 秒；模型调用 {settings.research_max_model_calls or '不限'} 次（含重试，已用 {len(ledger.calls)} 次）。")
+                if database:
+                    database.event(run_id, {"kind": "research_budget", "seconds": settings.research_total_timeout,
+                        "max_model_calls": settings.research_max_model_calls, "used_calls": len(ledger.calls),
+                        "historical_gap": ledger.historical_gap})
+            extra = {"conversation_input": conversation_input} if conversation_input is not None else {}
+            result = run_with_trace(graph, question, verbose=verbose, run_id=run_id, resume=resume, **extra)
             if database:
                 database.run_status(run_id, "completed" if result.get("generation_complete") and result.get("generation_grounded") else "needs_attention")
     except KeyboardInterrupt as exc:
@@ -550,16 +621,68 @@ def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=Fals
         return False
     except Exception as exc:
         if run_id and database and acquired:
-            database.run_status(run_id, "failed")
+            from .research.scheduler import ResearchWorkPending
+            database.run_status(run_id, "needs_attention" if isinstance(exc, ResearchWorkPending) else "failed")
         print("\n[本次执行未完成]")
         print(f"  {_run_error_message(exc)}")
         print("  交互模式仍可继续，请直接重新输入问题。")
         if run_id and database and acquired:
+            print(f"  恢复本次研究：agentic-rag --resume {run_id}（失败任务另加 --retry-failed）")
             show_failure_context(database, run_id, exc, verbose=verbose)
         if verbose:
             print(f"  异常类型：{type(exc).__module__}.{type(exc).__name__}")
         print_usage_summary(ledger, session_ledger=session_ledger, compact=not verbose)
         return False
+    print_answer(result, ledger, session_ledger=session_ledger, verbose=verbose)
+    if on_result is not None:
+        try:
+            on_result(result)
+        except Exception as exc:
+            # 记忆写入失败不重跑昂贵研究，也不能声称下一轮能看到它。
+            print(f"[会话未保存] {type(exc).__name__}: {exc}；研究结果仍已保留。")
+            return False
+    # 正常走到END不等于完成用户任务；脚本调用也必须能识别needs_attention。
+    return bool(result.get("generation_complete") and result.get("generation_grounded"))
+
+
+def converse(graph, question, conversation, *, verbose=False, session_ledger=None):
+    """会话理解先于研究：不确定就澄清；研究继续使用全新的 run/thread ID。"""
+    ledger = UsageLedger(observer=session_ledger.observe if session_ledger else None)
+    try:
+        with usage_session(ledger, scope="conversation"):
+            prepared = conversation.prepare(question)
+    except KeyboardInterrupt:
+        print("[会话理解已中断] 没有启动研究或写入半轮对话。")
+        print_usage_summary(ledger, compact=not verbose)
+        return False
+    except Exception as exc:
+        print(f"[会话读取失败] {type(exc).__name__}: {exc}；未启动研究。")
+        print_usage_summary(ledger, compact=not verbose)
+        return False
+    decision = prepared["conversation_resolution"]
+    decision["usage"] = ledger.report()["current"]
+    print(f"[会话 {conversation.id}] 第 {prepared['conversation_revision'] + 1} 轮 | "
+          f"摘要 {decision.get('compressed_turns', 0)} 轮 / 未装入 {decision.get('omitted_turns', 0)} 轮 | "
+          f"上下文 {decision.get('context_bytes', 0)} UTF-8 字节（非精确 Token）")
+    if ledger.report()["current"]["calls"]:
+        print_usage_summary(ledger, compact=not verbose)
+    run_id = uuid.uuid4().hex
+    if decision["mode"] == "clarify":
+        print(f"[需要澄清] {decision['clarification']}")
+        try:
+            conversation.remember(prepared, {"generation": decision["clarification"]}, run_id)
+        except Exception as exc:
+            print(f"[会话未保存] {type(exc).__name__}: {exc}")
+        return False
+    if decision["mode"] == "followup":
+        print(f"[追问还原] {prepared['question']}")
+    return ask(graph, prepared["question"], verbose=verbose, run_id=run_id, session_ledger=session_ledger,
+               conversation_input=prepared,
+               on_result=lambda result: conversation.remember(prepared, result, run_id))
+
+
+def print_answer(result, ledger, *, session_ledger=None, verbose=False):
+    """运行完成与离线查看共用同一答案/用量展示，不重新执行研究。"""
     print(f"\n{'=' * 18} 最终回答 {'=' * 18}\n")
     print(result["generation"])
     sources = {
@@ -575,7 +698,6 @@ def ask(graph, question: str, *, verbose: bool = False, run_id=None, resume=Fals
         for index, document in enumerate(result.get("answer_documents", result.get("documents", [])), 1):
             print(f"  [E{index}] {document.metadata.get('source', 'unknown')}")
     print_usage_summary(ledger, session_ledger=session_ledger, compact=not verbose)
-    return True
 
 
 def main() -> None:
@@ -587,6 +709,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-source agentic RAG")
     parser.add_argument("question", nargs="*", help="Question to ask (omit for interactive mode)")
     parser.add_argument("--resume", metavar="RUN_ID", help="恢复已保存研究；不与新问题同时使用")
+    parser.add_argument("--conversation", metavar="ID", help="接续指定会话（与 --resume 研究恢复不同）；省略时交互模式自动新建")
+    parser.add_argument("--no-conversation", action="store_true", help="禁用会话记忆，每题独立执行")
     parser.add_argument("--runs", action="store_true", help="列出最近研究，不调用模型")
     parser.add_argument("--status", metavar="RUN_ID", help="查看任务与最近执行事件")
     parser.add_argument("--retry-failed", action="store_true", help="与 --resume 配合，重新尝试失败子任务")
@@ -607,6 +731,14 @@ def main() -> None:
     args = parser.parse_args()
     if args.resume and args.question:
         parser.error("--resume 不能同时提交新问题")
+    if args.conversation and (args.resume or args.no_conversation):
+        parser.error("--conversation 不能与 --resume 或 --no-conversation 同时使用")
+    if args.conversation:
+        from .conversation import validate_id
+        try:
+            validate_id(args.conversation)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.retry_failed and not args.resume:
         parser.error("--retry-failed 需要 --resume")
     if args.idle_timeout < 0:
@@ -645,10 +777,30 @@ def main() -> None:
                     break
         return
 
+    # 已结束检查点是可离线展示的成果，不依赖 Ollama、索引监听或当前模型配置。
+    # 只读快照后直接展示，不进入 ask()，避免并发状态变化触发意外重跑。
+    if args.resume and not args.retry_failed:
+        from .research.inspection import read_snapshot
+        try:
+            snapshot = read_snapshot(args.resume)
+        except (OSError, sqlite3.Error):
+            snapshot = None
+        if snapshot and snapshot.values.get("generation") and not has_pending_work(snapshot) and not recoverable_reading(snapshot):
+            print(f"\n问题：{snapshot.values.get('question', '')}\n研究编号：{args.resume}")
+            print("该研究已结束，展示保存的结果；不连接模型、不刷新新闻、不改写研究记录。")
+            from .research.service import WORKFLOW_VERSION
+            if snapshot.values.get("workflow_revision") != WORKFLOW_VERSION:
+                print("[历史版本提示] 此结果未经过当前交付约束与证据检查；旧的通过标记不代表已通过新规则。要重新验证请发起新研究。")
+            history = database.token_events(args.resume)
+            print_answer(dict(snapshot.values), UsageLedger(history=history, historical_gap=not history),
+                         verbose=args.verbose)
+            return
+
     # 终端使用结构化步骤追踪；第三方库只保留错误，避免 HTTP 和回退警告淹没主流程。
     logging.basicConfig(level=logging.ERROR, format="  %(message)s")
 
     watcher = None
+    model_cleanup_needed = False
     session_ledger = UsageLedger()
     print(f"模型思考：{'开启' if settings.llm_reasoning else '关闭'}；生成额度（含思考）：{settings.llm_max_output_tokens} token")
     try:
@@ -659,6 +811,8 @@ def main() -> None:
             if not warm_up_model(session_ledger=session_ledger, verbose=args.verbose):
                 print("Ollama 模型未就绪，程序停止；请检查 Ollama 后重新启动。")
                 raise SystemExit(1)
+
+        model_cleanup_needed = True
 
         from langgraph.checkpoint.sqlite import SqliteSaver
         Path(settings.checkpoint_db).parent.mkdir(parents=True, exist_ok=True)
@@ -673,7 +827,12 @@ def main() -> None:
                 return
 
             if args.question:
-                succeeded = ask(graph, " ".join(args.question), verbose=args.verbose, run_id=uuid.uuid4().hex, session_ledger=session_ledger)
+                if args.conversation:
+                    from .conversation import Conversation, ConversationStore
+                    conversation = Conversation(ConversationStore(settings.conversation_db), args.conversation)
+                    succeeded = converse(graph, " ".join(args.question), conversation, verbose=args.verbose, session_ledger=session_ledger)
+                else:
+                    succeeded = ask(graph, " ".join(args.question), verbose=args.verbose, run_id=uuid.uuid4().hex, session_ledger=session_ledger)
                 if not succeeded:
                     raise SystemExit(1)
                 return
@@ -683,6 +842,11 @@ def main() -> None:
                 if args.idle_timeout > 0 else ""
             )
             print(f"Agentic RAG — 交互模式（Ctrl+C 或输入 exit 退出{timeout_note}）")
+            conversation = None
+            if not args.no_conversation:
+                from .conversation import Conversation, ConversationStore
+                conversation = Conversation(ConversationStore(settings.conversation_db), args.conversation)
+                print(f"会话编号：{conversation.id}；/new 新会话；/history 最近记录；/turn N 回读原文。")
             while True:
                 try:
                     question = input_with_timeout("\n> ", args.idle_timeout).strip()
@@ -693,12 +857,32 @@ def main() -> None:
                     break
                 if not question or question.lower() in {"exit", "quit"}:
                     break
-                ask(graph, question, verbose=args.verbose, run_id=uuid.uuid4().hex, session_ledger=session_ledger)
+                if conversation is not None:
+                    if question == "/new":
+                        conversation = Conversation(conversation.database)
+                        print(f"已切换新会话：{conversation.id}（旧会话保留，不再注入）")
+                        continue
+                    if question == "/history":
+                        _, turns = conversation.database.snapshot(conversation.id, limit=20)
+                        for turn in turns:
+                            print(f"{turn['sequence']}. [{turn['status']}] {_clip(turn['question'], 120)} | 研究 {turn['run_id']}")
+                        continue
+                    if question.startswith("/turn "):
+                        try:
+                            turn = conversation.database.turn(conversation.id, int(question[6:].strip()))
+                            print(json.dumps(turn, ensure_ascii=False, indent=2))
+                        except ValueError as exc:
+                            print(f"[回读失败] {exc}")
+                        continue
+                    converse(graph, question, conversation, verbose=args.verbose, session_ledger=session_ledger)
+                else:
+                    ask(graph, question, verbose=args.verbose, run_id=uuid.uuid4().hex, session_ledger=session_ledger)
     finally:
         if watcher is not None:
             watcher.stop()
             watcher.join()
-        unload_model(verbose=args.verbose)
+        if model_cleanup_needed:
+            unload_model(verbose=args.verbose)
 
 
 if __name__ == "__main__":

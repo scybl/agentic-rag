@@ -1,0 +1,2 @@
+# A unified patch's blank context line is a required single space, not a style error.
+*.patch text eol=lf whitespace=-blank-at-eol

@@ -18,6 +18,8 @@ evaluation/results.csv
 evaluation/results.md
 evaluation/eval_log.txt
 evaluation/eval_err.txt
+evaluation/runs/
+evaluation/reports/
 
 # IDE / OS
 .vscode/
@@ -31,3 +33,15 @@ Thumbs.db
 # Local interview preparation (keep files locally, never publish)
 *面试*
 *[Ii][Nn][Tt][Ee][Rr][Vv][Ii][Ee][Ww]*
+
+# Private project planning, resumes and temporary document imports
+docs/炫技增强技术设计.md
+docs/*规划*.md
+docs/*[Rr][Oo][Aa][Dd][Mm][Aa][Pp]*.md
+docs/plans/
+docs/planning/
+docs/*.docx
+docs/*.pdf
+*简历*
+rag_copy_staging/
+.rag-copy-receiver.mjs

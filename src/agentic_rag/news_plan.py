@@ -9,6 +9,16 @@ from zoneinfo import ZoneInfo
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
+def validate_api_query(query: str, section: str = "") -> None:
+    """服务端真实契约：每组最多 8 个 AND 词、200 字符，栏目最多 80 字符。"""
+    if not isinstance(query, str) or len(query.strip()) > 200:
+        raise ValueError("新闻查询词必须为不超过200字符的字符串")
+    if len(query.split()) > 8:
+        raise ValueError("每组新闻查询最多8个空格分隔的关键词，请拆成更短的查询")
+    if not isinstance(section, str) or len(section.strip()) > 80:
+        raise ValueError("新闻栏目必须为不超过80字符的字符串")
+
+
 def clean_queries(values: list[str], limit: int = 4) -> list[str]:
     """拆开模型误塞进单字段的查询列表，再限制数量并去重。"""
     queries = []
@@ -29,6 +39,31 @@ def clean_terms(values, *, limit: int, max_length: int = 100) -> list[str]:
         if term and term not in terms:
             terms.append(term)
     return terms[:limit]
+
+
+def query_covers_term(query: str, term: str) -> bool:
+    """API 的空格词是 AND；顺序不同可以覆盖，但不能跨查询拼成一次匹配。"""
+    tokens = term.casefold().split()
+    return bool(tokens) and all(token in query.casefold() for token in tokens)
+
+
+def compile_topic_queries(queries, topics, entities, *, limit=4):
+    """主题是检索线索，不是 JSON 合法性条件；在剩余预算内补搜并公开未覆盖项。"""
+    actual = list(queries)
+    added, deferred = [], []
+    anchor = next(iter(entities), "")
+    for topic in topics:
+        if any(query_covers_term(query, topic) for query in actual):
+            continue
+        query = f"{anchor} {topic}" if anchor and not query_covers_term(topic, anchor) else topic
+        # 有主题时不再执行无关键词的全库请求；不截断长词造成条件丢失。
+        candidates = [item for item in actual if item]
+        if len(candidates) < limit and len(query) <= 200 and len(query.split()) <= 8:
+            actual = [*candidates, query]
+            added.append(query)
+        else:
+            deferred.append(topic)
+    return actual, added, deferred
 
 
 def parse_news_timestamp(value: str) -> datetime | None:
@@ -116,10 +151,15 @@ def prepare_news_plan(
     source_names = clean_terms(source_names, limit=4)
     raw_queries = [query, *additional_queries]
     queries = clean_queries(raw_queries)
+    queries, added_queries, deferred_topics = compile_topic_queries(
+        queries, topics, [*people, *organizations],
+    )
     plan: dict[str, Any] = {
         "query": query.strip(),
         "raw_queries": raw_queries,
         "queries": queries or [""],
+        "added_topic_queries": added_queries,
+        "deferred_topics": deferred_topics,
         "people": people,
         "organizations": organizations,
         "topics": topics,
@@ -142,8 +182,8 @@ def prepare_news_plan(
     if coverage not in {"focused", "broad", "exhaustive"}:
         plan["error"] = "新闻覆盖模式无效"
         return plan
-    if isinstance(result_limit, bool) or not isinstance(result_limit, int) or not 1 <= result_limit <= 15:
-        plan["error"] = "新闻入选数量必须为 1–15"
+    if isinstance(result_limit, bool) or not isinstance(result_limit, int) or not 1 <= result_limit <= 100:
+        plan["error"] = "新闻入选数量必须为 1–100"
         return plan
     mode = suggestion.get("mode", "unrestricted")
     if mode == "unrestricted":

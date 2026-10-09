@@ -20,6 +20,7 @@ class CompactTrace:
     def __init__(self):
         self.queued = defaultdict(set)
         self.done = defaultdict(set)
+        self.screened = defaultdict(int)
 
     def show_event(self, event):
         kind = event.get("kind")
@@ -37,6 +38,14 @@ class CompactTrace:
                 print(f"[任务异常] {name} | {task[:12]} | {one_line(event.get('error'))}", flush=True)
             elif name == "reading_split":
                 print(f"[阅读缩段] {event.get('characters')} 字符 | 最多二分一次", flush=True)
+            elif name == "verbatim_read":
+                print(f"[短文原样保留] {event['characters']} 字符 | 阅读模型调用 0 | 未独立核实", flush=True)
+            elif name == "budget_plan":
+                print(f"[任务计划] 需要 {event['required']} / 数量上限 {event['allowed'] or '不限'} | 专题预留 {event['reserved_specialists']} | 并发 {event.get('workers', '?')}", flush=True)
+            elif name == "reread_context_limit":
+                print(f"[回读上下文] 已纳入 {event['included']}/{event['total']} 块 | {event['reason']}", flush=True)
+            elif name == "specialist_advice_filtered":
+                print(f"[专题建议校验] 未采纳含未核对数值的句子 | {event['reason']}", flush=True)
             elif name == "index_sync" and event.get("failed"):
                 print(f"[向量写入] 成功 {event['synced']} / 失败 {event['failed']} / 待处理 {event['remaining']}", flush=True)
         elif kind == "tool":
@@ -61,6 +70,9 @@ class CompactTrace:
             elif event.get("phase") == "failed":
                 print(f"[工具异常] {event.get('tool')} | {event.get('error_type', '')} | "
                       f"{one_line(event.get('error'))}", flush=True)
+        elif kind == "news_retry":
+            print(f"[新闻重试] HTTP {event['status_code']} | 第 {event['attempt']}/{event['max_attempts']} 次 | "
+                  f"等待 {event['delay']} 秒 | q={event.get('query')!r}", flush=True)
         elif kind == "news_request":
             print(f"[新闻请求] q={event.get('query')!r} | 日期 {dates(event.get('start'), event.get('end'))} | "
                   f"栏目 {event.get('section') or '不限'} | 第 {event['page']} 页 / 上限 {event['limit']}", flush=True)
@@ -69,13 +81,29 @@ class CompactTrace:
         elif kind == "news_ranked":
             print(f"[新闻排序] 原始 {event.get('raw_count', event['candidate_count'])} → 匹配候选 {event['candidate_count']} | "
                   f"正文预算入选 {event['selected_count']} / 暂未精读 {event.get('deferred_count', 0)} | "
-                  f"分页 {'已取完' if event.get('retrieval_complete') else '未取完/未知'} | "
+                  f"请求范围 {'已取完' if event.get('retrieval_complete') else '未取完/未知'} / {event.get('selection_scope', 'all_matches')} | "
                   f"评分 {event.get('ranking_method', '未记录')}（非热度）", flush=True)
         elif kind == "news_selected":
-            priority = event.get("priority", {})
+            priority = event.get("impact") or event.get("priority", {})
             print(f"[新闻精读选择] #{priority.get('rank', '?')} | 权重 {priority.get('score', '?')} | "
                   f"{one_line(event.get('title'))} | {event.get('article_id')} | "
                   f"{event.get('selection_reason', '')}", flush=True)
+        elif kind == "impact_progress":
+            print(f"[影响评分] {event['scored']}/{event['total']} | 复用 {event['cached']}", flush=True)
+        elif kind in {"news_screen_progress", "news_screen_batch"}:
+            stage = event["stage"]
+            if kind == "news_screen_progress":
+                self.screened[stage] = event["processed"]
+                print(f"[{'摘要初筛' if stage == 'abstract' else '正文主题核对'}] {event['processed']}/{event['total']} | 复用 {event['cached']} | 每批 {event['batch_size']}", flush=True)
+            else:
+                self.screened[stage] += event["count"]
+                print(f"[{'摘要初筛' if stage == 'abstract' else '正文主题核对'}] 已处理 {self.screened[stage]} | 本批明确无关 {event['excluded']}", flush=True)
+        elif kind == "news_core_replaced":
+            print(f"[核心文章补位] {event.get('article_id')} | {event['reason']}", flush=True)
+        elif kind == "news_core_ready":
+            print(f"[核心正文] {event['selected']}/{event['limit']} | 摘要 {event['abstracts']} / 初筛可用 {event['eligible']} | 正文请求 {event['attempted']}", flush=True)
+        elif kind == "news_scope_progress":
+            print(f"[主题与影响筛选] 已扫描 {event['scanned']} | 相关候选 {event['accepted']}/{event['required']} | 无关 {event['excluded']}", flush=True)
         elif kind == "news_filtered":
             print(f"[新闻过滤] {event['input_count']} → {event['matched_count']} | "
                   f"精确时间 {event.get('published_after') or '不限'} ~ {event.get('published_before') or '不限'} | "
@@ -98,7 +126,17 @@ class CompactTrace:
             for source, query in update.get("source_queries", {}).items():
                 print(f"[查询] {SOURCES.get(source, source)}={one_line(query)}")
             plan = update.get("news_search_plan", {})
+            contract = update.get("task_contract", {})
+            if contract:
+                print(f"[交付约束] 候选 {contract['candidate_limit']} / 分析 {contract['selection_limit']} | "
+                      f"最新优先 {contract['latest']} | 排名 {contract['ranking_mode']}")
+                if plan.get("supporting_queries"):
+                    print(f"[范围约束] 候选仅用主主题；扩展词未混入：{' / '.join(plan['supporting_queries'])}")
             if plan:
+                if plan.get("added_topic_queries"):
+                    print(f"[查询补全] {' / '.join(plan['added_topic_queries'])}")
+                if plan.get("deferred_topics"):
+                    print(f"[主题未单独检索] {'、'.join(plan['deferred_topics'])} | 本轮最多4组查询，未视为已覆盖")
                 suggestion = plan.get("suggested_time", {})
                 print(f"[日期] 模型={dates(suggestion.get('start'), suggestion.get('end'))} | "
                       f"实际={dates(plan.get('start'), plan.get('end'))} | {plan.get('time_note', '')}")

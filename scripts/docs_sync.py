@@ -207,8 +207,16 @@ def refresh_locations(root, text):
 
 
 def private_document(path):
-    """与 .gitignore 的面试资料规则对应；父目录命中也不参与公开文档维护。"""
-    return any("面试" in part or "interview" in part.casefold() for part in Path(path).parts)
+    """在读取前排除个人资料及项目规划，与公开仓库的忽略规则对应。"""
+    path = Path(path)
+    if any("面试" in part or "简历" in part or "interview" in part.casefold() for part in path.parts):
+        return True
+    if path.parts and path.parts[0] == "docs":
+        return (path.name == "炫技增强技术设计.md"
+                or any(part.casefold() in {"plans", "planning"} for part in path.parts[1:])
+                or path.suffix.casefold() in {".docx", ".pdf"}
+                or (path.suffix.casefold() == ".md" and ("规划" in path.name or "roadmap" in path.name.casefold())))
+    return False
 
 
 def document_paths(root):
@@ -218,11 +226,20 @@ def document_paths(root):
 
 
 def inventories(root):
-    sources = {root / ".env.example", root / ".gitignore", root / "pyproject.toml", root / "evaluation/dataset.json"}
-    for folder in ("src", "tests", "scripts", "evaluation"):
+    sources = {root / ".env.example", root / ".gitignore", root / ".gitattributes", root / "pyproject.toml",
+               root / "constraints-tested.txt", root / "evaluation/dataset.json"}
+    for folder in ("src", "tests", "scripts", "evaluation", "ops"):
         sources.update((root / folder).rglob("*.py"))
+    sources.update((root / "ops").rglob("*.patch"))
+    # 冻结语料/qrels 是实验输入，需要审阅；生成的运行报告不进入源码指纹。
+    sources.update((root / "evaluation/suites").rglob("*.json"))
     for pattern in ("*.yml", "*.yaml"):
         sources.update((root / ".github").rglob(pattern))
+    # 运行目录可能含调试脚本或获授权导出的服务器源码；既非发布源码，
+    # 也不能成为干净克隆必须拥有的文件。排除必须早于文件读取。
+    sources = {p for p in sources if not private_document(p.relative_to(root))
+               and p.relative_to(root).parts[:2] not in {
+                   ("evaluation", "runs"), ("evaluation", "reports")}}
     def hashes(paths):
         return {p.relative_to(root).as_posix(): hashlib.sha256(read(root, p).encode()).hexdigest()
                 for p in sorted(paths) if p.is_file()}
@@ -276,7 +293,7 @@ def validate_links(root):
                 continue
             dest = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path
             if dest.is_relative_to(root.resolve()) and private_document(dest.relative_to(root.resolve())):
-                errors.append(f"公开文档不能依赖本地面试资料：{path.name} → {link}")
+                errors.append(f"公开文档不能依赖本地私有资料或规划：{path.name} → {link}")
             elif not dest.is_file() or not dest.is_relative_to(root.resolve()):
                 errors.append(f"本地链接不存在或越界：{path.name} → {link}")
             elif parsed.fragment and dest.suffix == ".html":

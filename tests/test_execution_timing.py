@@ -12,7 +12,9 @@ from agentic_rag.research.store import ResearchStore
 def test_step_and_session_time_include_zero_model_work_and_ignore_wall_clock_changes(monkeypatch):
     ticks = iter([10, 11, 13.5, 16])
     monkeypatch.setattr(usage, "perf_counter", lambda: next(ticks))
-    with patch.object(usage.time, "time", side_effect=[1000, 5]):
+    wall_clock = iter([1000, 5])
+    # 事件也记录墙钟时间；第一次回拨后保持 5，计时仍必须来自单调时钟。
+    with patch.object(usage.time, "time", side_effect=lambda: next(wall_clock, 5)):
         ledger = usage.UsageLedger()
         with usage.usage_session(ledger):
             usage.meter_node("collect_sources", lambda state: state)({})
@@ -108,7 +110,7 @@ def test_cli_warmup_is_separate_and_question_summary_is_after_answer(capsys):
     assert process.report()["timing"]["cumulative"]["sessions"] == 1
     class Graph:
         def stream(self, *args, **kwargs):
-            yield "updates", {"generate": {"generation": "计时测试答案"}}
+            yield "updates", {"generate": {"generation": "计时测试答案", "generation_complete": True, "generation_grounded": True}}
     assert cli.ask(Graph(), "测试", session_ledger=process, verbose=True)
     text = capsys.readouterr().out
     assert text.index("计时测试答案") < text.index("耗时统计") < text.index("Token 最终合计")

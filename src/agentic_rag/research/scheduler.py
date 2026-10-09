@@ -21,11 +21,16 @@ class TaskSpec:
     dependencies: list[str] = field(default_factory=list)
 
 
+class ResearchWorkPending(RuntimeError):
+    """已承诺的任务尚未完成；让图停在当前节点，恢复时只补做缺失成果。"""
+
+
 class Scheduler:
-    def __init__(self, store, run_id, *, workers=None, budget=None, emit=None, attempts=None, lease=None, timeout=None):
+    def __init__(self, store, run_id, *, workers=None, budget=None, emit=None, attempts=None, lease=None, timeout=None, limit_tasks=True):
         self.store, self.run_id = store, run_id
         self.workers = workers or settings.agent_workers
         self.budget = budget or settings.research_max_tasks
+        self.limit_tasks = limit_tasks
         self.attempts = attempts or settings.task_max_attempts
         self.lease = lease or settings.task_lease_seconds
         self.timeout = timeout or settings.research_timeout
@@ -71,7 +76,7 @@ class Scheduler:
                     return None
                 self.cancel.wait(0.1)
                 continue
-            self.emit("started", spec=spec)
+            attempt_started = time.monotonic()
             token = task_context.set({"emit": lambda kind, data: self.emit(kind, data, spec),
                                       "cancel": self.cancel, "deadline": deadline,
                                       "task_id": spec.key, "role": spec.kind,
@@ -79,16 +84,25 @@ class Scheduler:
             usage_token = active_task.set({"task_id": spec.key, "task_kind": spec.kind,
                                            "task_attempt": row["attempts"] + 1})
             try:
+                self.emit("started", {"task_attempt": row["attempts"] + 1}, spec=spec)
                 result = handler(spec.payload)
                 if self.cancel.is_set() or time.monotonic() > deadline:
-                    raise TimeoutError("任务已经取消或超过本轮时间预算")
+                    self.store.defer_budget(spec.key, self.owner)
+                    self.emit("deferred", {"error": "本轮已取消或超时，未提交迟到结果；任务可恢复"}, spec)
+                    return None
                 vector = result.pop("_vector", None)
                 self.store.complete(spec.key, self.owner, result, vector)
-                self.emit("completed", {"elapsed": round(time.monotonic() - started, 2)}, spec)
+                self.emit("completed", {"elapsed": round(time.monotonic() - attempt_started, 3)}, spec)
                 return result
             except Exception as exc:
+                from ..budget import ResearchBudgetExceeded
+                if isinstance(exc, ResearchBudgetExceeded):
+                    self.store.defer_budget(spec.key, self.owner)
+                    self.emit("budget", {"error": str(exc), "retry_skipped": True}, spec)
+                    raise
                 self.store.fail(spec.key, self.owner, exc)
-                self.emit("attempt_failed", {"error": str(exc)[:500]}, spec)
+                self.emit("attempt_failed", {"error": str(exc)[:500], "error_type": type(exc).__name__,
+                                             "elapsed": round(time.monotonic() - attempt_started, 3)}, spec)
                 if getattr(exc, "retryable", True) is False:
                     self.emit("failed", {"error": str(exc)[:500], "retry_skipped": True}, spec)
                     return None
@@ -103,7 +117,8 @@ class Scheduler:
         for spec in specs:
             if spec.kind not in handlers:
                 raise ValueError(f"未注册的任务角色：{spec.kind}")
-            if self.store.submit(self.run_id, spec.key, spec.kind, spec.payload, spec.dependencies, self.budget):
+            if self.store.submit(self.run_id, spec.key, spec.kind, spec.payload, spec.dependencies,
+                                 self.budget if self.limit_tasks else None):
                 pending[spec.key] = spec
                 self.emit("queued", {"dependencies": [k[:12] for k in spec.dependencies]}, spec)
             else:
@@ -112,8 +127,13 @@ class Scheduler:
         pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="research-agent")
         active = {}
         deadline = time.monotonic() + self.timeout
+        from ..budget import active_budget, check_budget
+        shared_budget = active_budget.get()
+        if shared_budget and shared_budget.remaining() is not None:
+            deadline = min(deadline, time.monotonic() + shared_budget.remaining())
         try:
             while pending or active:
+                check_budget()
                 if time.monotonic() > deadline:
                     self.emit("timeout", {"error": "本轮执行时间达到上限，未完成任务可恢复"})
                     break
